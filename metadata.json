@@ -1,0 +1,8 @@
+{
+  "name": "Calcare",
+  "description": "Aplikasi penghitung luas, keliling, dan dimensi lahan menggunakan geometri sferis (Spherical Geometry) berdasarkan titik koordinat dengan Leaflet dan Turf.js.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": []
+}
