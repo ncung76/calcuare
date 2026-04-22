@@ -5,8 +5,10 @@ export const translations = {
     projectLibrary: "Project Library",
     utmSettings: "Settings",
     exportData: "Export Data",
+    noPointsYet: "No coordinates added yet. Use the map or form above to start survey.",
     toggleTheme: "Toggle Dark/Light Mode",
     toggleLang: "Switch to Bahasa Indonesia",
+    measureTool: "Measure Distance",
     
     // Sidebar
     inputCoordsHeader: "01 // Input Coordinates",
@@ -16,7 +18,15 @@ export const translations = {
     addNextCoord: "Add Next Coordinate",
     undo: "Undo",
     clear: "Clear",
+    freehand: "Freehand Draw",
+    freehandActive: "Drawing Mode Active",
+    doneDrawing: "Done Drawing",
+    editMode: "Edit Mode",
+    addMode: "Add Points",
+    editModeActive: "Edit Mode Active",
     allRightsReserved: "All Rights Reserved",
+    autoSaving: "Saving...",
+    autoSaved: "Saved",
     
     // Search
     searchPlaceholder: "Search region, city, address...",
@@ -27,6 +37,11 @@ export const translations = {
     perimeter: "Perimeter",
     estLength: "Est. Length",
     estWidth: "Est. Width",
+    
+    // Tooltips
+    areaTooltip: "Calculated using spherical geometry (WGS84 ellipsoid) for high accuracy over geographical distances.",
+    mbrTooltip: "Minimum Bounding Rectangle. Represents the overall extent (Length x Width) of the shape.",
+    perimeterTooltip: "The total linear distance around the perimeter of the shape.",
     
     // Library Modal
     newProjectName: "New Project Name...",
@@ -46,15 +61,31 @@ export const translations = {
     estimatedPerimeter: "Estimated Perimeter:",
     generating: "Generating Document...",
     exportPdfBtn: "Export PDF Report",
+    toggleUnits: "Switch Unit",
+    exportGeoJSON: "Export GeoJSON",
+    exportCSV: "Export CSV (Excel)",
     
     // Settings Modal
     measurementUnit: "Measurement Unit",
-    metric: "Metric (Meters, Hectares)",
+    areaDisplayUnit: "Primary Area Unit",
+    areUnit: "Are",
+    hectaresUnit: "Hectares",
+    sqmUnit: "Square Meters",
+    metric: "Metric (Meters, Are)",
     imperial: "Imperial (Feet, Acres)",
+    mapTab: "Map View",
+    pointsTab: "Input Points",
+    statsTab: "Results",
     mapRenderStyle: "Map Render Style",
     showGrid: "Show Survey Grid Overlay",
-    crsInfoTitle: "CRS Information:",
-    crsInfoText: "Turf.js intrinsically assumes data uses WGS84 (EPSG:4326). Map relies on Web Mercator (EPSG:3857) for visual rendering.",
+    crsInfoTitle: "Apps Information :",
+    crsInfoText: "Created by Rifky Rangga to make it easier for you to calculate the area of land you own with 99% accuracy. \n\n©2026 All Rights Reserved",
+    
+    // Precision Settings
+    calcPrecision: "Calculation Precision",
+    haSqmPrecision: "Hectares & Sq Meters Precision",
+    arePrecisionLabel: "Are Precision",
+    decimalPlaces: "Decimal Places",
     
     // Alerts
     pdfFailed: "Failed to generate PDF. Please try again.",
@@ -67,8 +98,10 @@ export const translations = {
     projectLibrary: "Pustaka Proyek",
     utmSettings: "Pengaturan",
     exportData: "Ekspor Data",
+    noPointsYet: "Belum ada koordinat. Gunakan peta atau formulir di atas untuk memulai survei.",
     toggleTheme: "Ganti Mode Gelap/Terang",
     toggleLang: "Switch to English",
+    measureTool: "Ukur Jarak",
     
     // Sidebar
     inputCoordsHeader: "01 // Input Koordinat",
@@ -78,7 +111,15 @@ export const translations = {
     addNextCoord: "Tambah Koordinat Berikutnya",
     undo: "Batal",
     clear: "Hapus",
+    freehand: "Gambar Bebas",
+    freehandActive: "Mode Gambar Aktif",
+    doneDrawing: "Selesai Menggambar",
+    editMode: "Mode Ubah",
+    addMode: "Tambah Titik",
+    editModeActive: "Mode Ubah Aktif",
     allRightsReserved: "Hak Cipta Dilindungi",
+    autoSaving: "Menyimpan...",
+    autoSaved: "Tersimpan",
     
     // Search
     searchPlaceholder: "Cari wilayah, kota, alamat...",
@@ -89,6 +130,11 @@ export const translations = {
     perimeter: "Keliling",
     estLength: "Est. Panjang",
     estWidth: "Est. Lebar",
+    
+    // Tooltips
+    areaTooltip: "Dihitung menggunakan geometri sferis (ellipsoid WGS84) untuk akurasi tinggi pada jarak geografis.",
+    mbrTooltip: "Minimum Bounding Rectangle. Mewakili dimensi keseluruhan (Panjang x Lebar) dari bentuk lahan.",
+    perimeterTooltip: "Total jarak linier di sepanjang batas luar bentuk lahan.",
     
     // Library Modal
     newProjectName: "Nama Proyek Baru...",
@@ -108,15 +154,31 @@ export const translations = {
     estimatedPerimeter: "Estimasi Keliling:",
     generating: "Membuat Dokumen...",
     exportPdfBtn: "Ekspor Laporan PDF",
+    toggleUnits: "Ganti Satuan",
+    exportGeoJSON: "Ekspor GeoJSON",
+    exportCSV: "Ekspor CSV (Excel)",
     
     // Settings Modal
     measurementUnit: "Satuan Pengukuran",
-    metric: "Metrik (Meter, Hektare)",
+    areaDisplayUnit: "Unit Luas Utama",
+    areUnit: "Are",
+    hectaresUnit: "Hektar",
+    sqmUnit: "Meter Persegi",
+    metric: "Metrik (Meter, Are)",
     imperial: "Imperial (Kaki, Akre)",
+    mapTab: "Lihat Peta",
+    pointsTab: "Input Titik",
+    statsTab: "Hasil",
     mapRenderStyle: "Gaya Render Peta",
     showGrid: "Tampilkan Kisi Survei",
-    crsInfoTitle: "Informasi CRS:",
-    crsInfoText: "Turf.js secara asal menggunakan WGS84 (EPSG:4326). Peta menggunakan Web Mercator (EPSG:3857) untuk rendering visual.",
+    crsInfoTitle: "Apps Information :",
+    crsInfoText: "Dibuat oleh Rifky Rangga untuk mempermudah anda menghitung luas lahan yang anda miliki dengan ketepatan 99%. \n\n©2026 All Rights Reserved",
+    
+    // Precision Settings
+    calcPrecision: "Presisi Kalkulasi",
+    haSqmPrecision: "Desimal Hektar & Meter Persegi",
+    arePrecisionLabel: "Desimal Are",
+    decimalPlaces: "Digit Desimal",
     
     // Alerts
     pdfFailed: "Gagal membuat PDF. Silakan coba lagi.",
