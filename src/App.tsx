@@ -1274,8 +1274,9 @@ const CustomZoomControl = () => {
           </nav>
 
           <div className="flex lg:hidden items-center gap-2">
-             <button onClick={() => setActiveModal('library')} className="p-2 border border-[var(--color-fg)]/10 rounded"><Layers size={16} className="opacity-70"/></button>
-             <button onClick={() => setActiveModal('settings')} className="p-2 border border-[var(--color-fg)]/10 rounded"><Settings size={16} className="opacity-70" /></button>
+             <button onClick={() => setActiveModal('library')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'projectLibrary')}><Layers size={16} className="opacity-70"/></button>
+             <button onClick={() => setActiveModal('settings')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'utmSettings')}><Settings size={16} className="opacity-70" /></button>
+             <button onClick={() => setActiveModal('export')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'exportData')}><Download size={16} className="opacity-70"/></button>
           </div>
           
           <div className="flex items-center gap-2">
@@ -1622,7 +1623,7 @@ const CustomZoomControl = () => {
               center={[-8.6705, 115.2126]} 
             zoom={12} 
             maxZoom={24}
-            className={`w-full h-full z-10 ${isFreehand || isMeasuring ? 'cursor-crosshair' : ''}`}
+            className={`w-full h-full z-10 ${(!isEditMode || isFreehand || isMeasuring) ? 'cursor-crosshair' : ''}`}
             zoomControl={false}
             attributionControl={false}
           >
@@ -1927,7 +1928,14 @@ const CustomZoomControl = () => {
             </div>
           </div>
 
-          <div className="mt-auto pt-8">
+          <div className="mt-auto pt-8 space-y-4">
+            <button 
+              onClick={() => setActiveModal('export')}
+              disabled={points.length === 0}
+              className="w-full py-4 bg-[var(--color-fg)] text-[var(--color-bg)] text-[12px] uppercase tracking-widest font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed shadow-lg"
+            >
+              <Download size={16} /> {t(lang, 'exportData')}
+            </button>
             <div className="p-4 bg-[var(--color-bg)] border-l-2 border-[var(--color-fg)] flex items-center justify-between">
               <span className="text-[12px] uppercase tracking-wider font-bold">Project Status</span>
               {points.length < 3 ? (
