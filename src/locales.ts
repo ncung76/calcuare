@@ -27,16 +27,24 @@ export const translations = {
     allRightsReserved: "All Rights Reserved",
     autoSaving: "Saving...",
     autoSaved: "Saved",
+    newProject: "New Location",
+    loginWithGoogle: "Login with Google",
+    signOut: "Sign Out",
+    welcomeUser: "Welcome",
+    syncingToCloud: "Syncing to cloud...",
+    cloudSaved: "Cloud Saved",
+    loginToSave: "Login to save projects naturally",
     
     // Search
-    searchPlaceholder: "Search region, city, address...",
+    searchPlaceholder: "Search region, city, address or coordinates...",
+    searching: "Searching",
     
     // Map overlays
     metricsHover: "Measurement Metrics",
     area: "Area",
     perimeter: "Perimeter",
-    estLength: "Est. Length",
-    estWidth: "Est. Width",
+    estLength: "Est. Length (m)",
+    estWidth: "Est. Width (m)",
     
     // Tooltips
     areaTooltip: "Calculated using spherical geometry (WGS84 ellipsoid) for high accuracy over geographical distances.",
@@ -53,6 +61,13 @@ export const translations = {
     points: "points",
     delete: "Delete",
     loadProject: "Load Project",
+    share: "Share",
+    shareProject: "Share Project",
+    copyLink: "Copy Link",
+    linkCopied: "Link copied to clipboard!",
+    unshare: "Unshare",
+    publicAccess: "Public access is enabled",
+    privateAccess: "Project is private",
     
     // Export Modal
     exportDesc: "Generate a full PDF report including a visual map screenshot, point coordinates, line measurements, and final land metrics.",
@@ -120,16 +135,24 @@ export const translations = {
     allRightsReserved: "Hak Cipta Dilindungi",
     autoSaving: "Menyimpan...",
     autoSaved: "Tersimpan",
+    newProject: "Lokasi Baru",
+    loginWithGoogle: "Masuk dengan Google",
+    signOut: "Keluar",
+    welcomeUser: "Selamat Datang",
+    syncingToCloud: "Menyelaraskan...",
+    cloudSaved: "Tersimpan di Cloud",
+    loginToSave: "Masuk untuk simpan di awan",
     
     // Search
-    searchPlaceholder: "Cari wilayah, kota, alamat...",
+    searchPlaceholder: "Cari wilayah, kota, alamat atau koordinat...",
+    searching: "Mencari",
     
     // Map overlays
     metricsHover: "Metrik Pengukuran",
     area: "Luas",
     perimeter: "Keliling",
-    estLength: "Est. Panjang",
-    estWidth: "Est. Lebar",
+    estLength: "Est. Panjang (m)",
+    estWidth: "Est. Lebar (m)",
     
     // Tooltips
     areaTooltip: "Dihitung menggunakan geometri sferis (ellipsoid WGS84) untuk akurasi tinggi pada jarak geografis.",
@@ -146,6 +169,13 @@ export const translations = {
     points: "titik",
     delete: "Hapus",
     loadProject: "Muat Proyek",
+    share: "Bagikan",
+    shareProject: "Bagikan Proyek",
+    copyLink: "Salin Tautan",
+    linkCopied: "Tautan disalin ke papan klip!",
+    unshare: "Batal Bagikan",
+    publicAccess: "Akses publik diaktifkan",
+    privateAccess: "Proyek bersifat pribadi",
     
     // Export Modal
     exportDesc: "Buat laporan PDF lengkap yang mencakup tangkapan layar peta, koordinat titik, pengukuran garis, dan metrik lahan akhir.",

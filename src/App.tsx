@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { auth, loginWithGoogle, logout } from './lib/firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import * as firebaseService from './services/firebaseService';
 import { MapContainer, TileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup } from 'react-leaflet';
 import * as turf from '@turf/turf';
-import { MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2 } from 'lucide-react';
+import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 import L from 'leaflet';
@@ -396,6 +399,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
+  const [selectedSearchResult, setSelectedSearchResult] = useState<any | null>(null);
   const [isFreehand, setIsFreehand] = useState(false);
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [measurePoints, setMeasurePoints] = useState<[number, number][]>([]);
@@ -404,6 +408,7 @@ export default function App() {
   const [currentProjectId, setCurrentProjectId] = useState<number | null>(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
 
   // Modal State
   const [activeModal, setActiveModal] = useState<'none' | 'library' | 'settings' | 'export'>('none');
@@ -423,11 +428,98 @@ export default function App() {
   });
   const [mobileTab, setMobileTab] = useState<'map' | 'points' | 'stats'>('map');
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [isSharing, setIsSharing] = useState<string | null>(null);
+  const [shareStatus, setShareStatus] = useState<{[key: string]: boolean}>({});
+
+  // Auth State
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  const handleNewProject = useCallback(() => {
+     // Clear current workspace completely and immediately
+     setPoints([]);
+     setCurrentProjectId(null);
+     setSelectedPointIndex(null);
+     setAutoSaveStatus('idle');
+     setSelectedSearchResult(null);
+     setSelectedResultId(null);
+     setNewProjectName("");
+     
+     // Reset all interactive tools/states
+     setMeasurePoints([]);
+     setIsFreehand(false);
+     setIsEditMode(false);
+     setIsDrawing(false);
+     setIsMeasuring(false);
+     
+     // Persistence cleanup
+     localStorage.removeItem('calcare_points_draft');
+     localStorage.removeItem('calcare_current_id');
+
+     // Smooth URL cleanup
+     try {
+       const url = new URL(window.location.href);
+       if (url.searchParams.has('share')) {
+         url.searchParams.delete('share');
+         window.history.pushState({}, '', url.toString());
+       }
+     } catch (e) {}
+     
+     // Direct UI feedback: close modal and return to map
+     setActiveModal('none');
+     setMobileTab('map');
+  }, [setPoints, setCurrentProjectId, setSelectedPointIndex, setAutoSaveStatus, setSelectedSearchResult, setSelectedResultId, setNewProjectName, setMeasurePoints, setIsFreehand, setIsEditMode, setIsDrawing, setIsMeasuring, setActiveModal, setMobileTab]);
   
   // Custom Sync State
   const [gasUrl, setGasUrl] = useState('https://script.google.com/macros/s/AKfycbxjLsv05ASo9hM6zK2juoKtcX9gUypBupmEkt6IrSHE5335_Z7kktHOcIz23BVtIFIELA/exec');
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSettingUpSheet, setIsSettingUpSheet] = useState(false);
+
+  // Initial Auth & Data Load
+  useEffect(() => {
+    firebaseService.testConnection();
+
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsAuthLoading(false);
+      if (u) {
+        firebaseService.saveUserProfile();
+        // Fetch from cloud when logged in
+        firebaseService.fetchUserProjects().then(cloudProjs => {
+          if (cloudProjs && cloudProjs.length > 0) {
+            setSavedProjects(cloudProjs);
+          }
+        });
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const shareId = params.get('share');
+    if (shareId) {
+      const loadSharedProject = async () => {
+        try {
+          const project = await firebaseService.getProjectById(shareId);
+          if (project) {
+            setPoints(project.points);
+            setCurrentProjectId(project.id);
+            setNewProjectName(project.name || "");
+            if (project.points.length > 0) {
+              setMapCenter([project.points[0].lat, project.points[0].lng]);
+            }
+          } else {
+            console.warn("Shared project not found or access denied");
+          }
+        } catch (err) {
+          console.error("Failed to load shared project:", err);
+        }
+      };
+      loadSharedProject();
+    }
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('calcare_area_unit', areaUnit);
@@ -491,39 +583,67 @@ export default function App() {
   useEffect(() => {
     // Auto-save logic
     if (points.length === 0) {
-      if (currentProjectId) {
-          // If points are cleared manually, maybe we don't auto-clear the project in library?
-          // But we should clear the draft.
-          localStorage.removeItem('calcare_points_draft');
-      }
+      if (autoSaveStatus !== 'idle') setAutoSaveStatus('idle');
+      // If points are cleared, we should remove the draft even if currentProjectId is null
+      localStorage.removeItem('calcare_points_draft');
       return;
     }
 
     setAutoSaveStatus('saving');
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       // 1. Save to draft workspace
       localStorage.setItem('calcare_points_draft', JSON.stringify(points));
-      localStorage.setItem('calcare_current_id', String(currentProjectId));
-
-      // 2. If editing a library project, update it
-      if (currentProjectId) {
-        setSavedProjects(prev => {
-          const updated = prev.map(p => {
+      
+      // 2. Manage Library Entry
+      let projectToSync: any = null;
+      setSavedProjects(prev => {
+        let updated;
+        if (currentProjectId) {
+          // Update existing
+          updated = prev.map(p => {
             if (p.id === currentProjectId) {
-              return { 
+              projectToSync = { 
                 ...p, 
                 points, 
                 date: new Date().toISOString(),
                 areaSqMeters: stats.areaSqMeters,
                 perimeter: stats.perimeter
               };
+              return projectToSync;
             }
             return p;
           });
-          localStorage.setItem('geocalc_projects', JSON.stringify(updated));
-          return updated;
-        });
+        } else {
+          // Auto-create new entry in library
+          const newId = `proj_${Date.now()}`;
+          projectToSync = {
+            id: newId,
+            name: `Survey ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+            points,
+            date: new Date().toISOString(),
+            areaSqMeters: stats.areaSqMeters,
+            perimeter: stats.perimeter,
+            unit: areaUnit,
+            shared: false
+          };
+          updated = [projectToSync, ...prev];
+          setCurrentProjectId(newId);
+          localStorage.setItem('calcare_current_id', newId);
+        }
+        
+        localStorage.setItem('geocalc_projects', JSON.stringify(updated));
+        return updated;
+      });
+
+      // 3. Sync to Cloud if logged in
+      if (user && projectToSync) {
+        try {
+          await firebaseService.saveProject(projectToSync);
+        } catch (err) {
+          console.error("Cloud auto-save failed", err);
+        }
       }
+
       setAutoSaveStatus('saved');
       setTimeout(() => setAutoSaveStatus('idle'), 2000);
     }, 2000); // 2 second debounce
@@ -649,17 +769,60 @@ export default function App() {
     }
   };
 
-  const handleSearch = async (e?: React.FormEvent) => {
+  const handleSearch = useCallback(async (e?: React.FormEvent) => {
       if (e) e.preventDefault();
-      if (!searchQuery.trim()) return;
+      if (!searchQuery.trim()) {
+          setSearchResults([]);
+          setIsSearching(false);
+          return;
+      }
+
+      // Detect if search query is a coordinate (e.g. -8.779214, 115.189608)
+      const coordRegex = /^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/;
+      const match = searchQuery.trim().match(coordRegex);
+
+      if (match) {
+          const lat = parseFloat(match[1]);
+          const lon = parseFloat(match[2]);
+          
+          if (!isNaN(lat) && !isNaN(lon)) {
+              const coordResult = {
+                  place_id: `coord_${lat}_${lon}`,
+                  lat: lat.toString(),
+                  lon: lon.toString(),
+                  display_name: `${lat}, ${lon} (Koordinat)`,
+                  address: { name: "Lokasi Koordinat" }
+              };
+              setSearchResults([coordResult]);
+              setMapCenter([lat, lon]);
+              setSelectedSearchResult(coordResult);
+              setSelectedResultId(coordResult.place_id);
+              setSearchResults([]); // Hide list and show detail instead
+              return;
+          }
+      }
+
+      setIsSearching(true);
       try {
-          const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(searchQuery)}`);
+          // Tambahkan bounded, countrycodes, dan namedetails untuk hasil yang lebih akurat
+          const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&namedetails=1&countrycodes=id&limit=10&q=${encodeURIComponent(searchQuery)}`);
           const data = await res.json();
-          setSearchResults(data);
+          if (Array.isArray(data)) {
+              setSearchResults(data);
+          }
       } catch (err) {
           console.error("Search failed", err);
+      } finally {
+          setIsSearching(false);
       }
-  };
+  }, [searchQuery]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+        handleSearch();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [handleSearch]);
 
   // Nav Handlers
   const handleExport = async () => {
@@ -884,13 +1047,24 @@ export default function App() {
     setIsSyncing(true);
 
     const newProj = { 
-        id: Date.now(), 
+        id: `proj_${Date.now()}`, 
         name: newProjectName, 
         points, 
         date: new Date().toISOString(),
         areaSqMeters: stats.areaSqMeters,
-        perimeter: stats.perimeter
+        perimeter: stats.perimeter,
+        unit: areaUnit,
+        shared: false
     };
+    
+    // Cloud Save
+    if (user) {
+        try {
+            await firebaseService.saveProject(newProj);
+        } catch (err) {
+            console.error("Cloud save failed", err);
+        }
+    }
     
     // Local Save
     const updated = [newProj, ...savedProjects];
@@ -943,6 +1117,7 @@ export default function App() {
   const loadProject = (proj: any) => {
     setPoints(proj.points);
     setCurrentProjectId(proj.id);
+    setNewProjectName(proj.name || "");
     localStorage.setItem('calcare_points_draft', JSON.stringify(proj.points));
     localStorage.setItem('calcare_current_id', String(proj.id));
     setActiveModal('none');
@@ -950,10 +1125,45 @@ export default function App() {
     setSearchQuery('');
   };
 
-  const deleteProject = (id: number) => {
+  const deleteProject = async (id: any) => {
+    if (user) {
+      try {
+        await firebaseService.deleteUserProject(String(id));
+      } catch (err) {
+        console.error("Failed to delete from cloud", err);
+      }
+    }
     const updated = savedProjects.filter(p => p.id !== id);
     setSavedProjects(updated);
     localStorage.setItem('geocalc_projects', JSON.stringify(updated));
+  };
+
+  const handleShareProject = async (proj: any) => {
+    if (!user) return;
+    setIsSharing(proj.id);
+    const newShareStatus = !proj.shared;
+    
+    try {
+      await firebaseService.updateProjectShare(proj.id, newShareStatus);
+      const updatedProjects = savedProjects.map(p => 
+        p.id === proj.id ? { ...p, shared: newShareStatus } : p
+      );
+      setSavedProjects(updatedProjects);
+      localStorage.setItem('geocalc_projects', JSON.stringify(updatedProjects));
+      
+      if (newShareStatus) {
+        const shareUrl = `${window.location.origin}${window.location.pathname}?share=${proj.id}`;
+        await navigator.clipboard.writeText(shareUrl);
+        setShareStatus(prev => ({ ...prev, [proj.id]: true }));
+        setTimeout(() => {
+          setShareStatus(prev => ({ ...prev, [proj.id]: false }));
+        }, 3000);
+      }
+    } catch (err) {
+      console.error("Sharing failed:", err);
+    } finally {
+      setIsSharing(null);
+    }
   };
 
   const MapClickHandler = ({ disabled }: { disabled?: boolean }) => {
@@ -1076,7 +1286,7 @@ const CustomZoomControl = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[var(--color-bg)] font-sans text-[var(--color-fg)] overflow-hidden">
+    <div className="flex flex-col h-[100dvh] w-full bg-[var(--color-bg)] font-sans text-[var(--color-fg)] overflow-hidden">
       
       {/* Modals Overlay */}
       {activeModal !== 'none' && (
@@ -1095,6 +1305,20 @@ const CustomZoomControl = () => {
                     {/* Library Modal */}
                     {activeModal === 'library' && (
                         <div className="space-y-8">
+                            <button 
+                                onClick={handleNewProject}
+                                className="w-full py-3 border-2 border-dashed border-[var(--color-fg)]/20 rounded flex items-center justify-center gap-2 text-[12px] uppercase tracking-widest font-bold opacity-60 hover:opacity-100 hover:border-[var(--color-fg)] hover:bg-[var(--color-fg)]/5 transition-all"
+                            >
+                                <Plus size={14} /> {t(lang, 'newProject')}
+                            </button>
+
+                            {!user && (
+                                <div className="bg-orange-500/5 border border-orange-500/20 p-4 rounded text-[11px] uppercase tracking-widest font-bold text-orange-600 dark:text-orange-400 flex items-center justify-between">
+                                    <span>{t(lang, 'loginToSave')}</span>
+                                    <button onClick={loginWithGoogle} className="bg-orange-500 text-white px-3 py-1 rounded text-[9px]">{t(lang, 'loginWithGoogle')}</button>
+                                </div>
+                            )}
+
                             <div>
                                 <form onSubmit={handleSaveProject} className="flex gap-2">
                                     <input 
@@ -1127,8 +1351,34 @@ const CustomZoomControl = () => {
                                                         <div className="font-bold text-[15px] tracking-tight">{proj.name}</div>
                                                         <div className="text-[12px] font-mono opacity-50">{new Date(proj.date).toLocaleDateString()} • {proj.points.length} {t(lang, 'points')}</div>
                                                     </div>
-                                                    <button onClick={() => deleteProject(proj.id)} className="text-red-500 opacity-60 hover:opacity-100 text-[12px] uppercase font-bold">{t(lang, 'delete')}</button>
+                                                    <div className="flex gap-2">
+                                                        <button 
+                                                            onClick={() => handleShareProject(proj)} 
+                                                            disabled={isSharing === proj.id}
+                                                            className={`p-1.5 border rounded transition-all flex items-center justify-center ${proj.shared ? 'bg-green-500/10 border-green-500/30 text-green-600' : 'border-[var(--color-fg)]/20 opacity-60 hover:opacity-100'}`}
+                                                            title={proj.shared ? t(lang, 'unshare') : t(lang, 'share')}
+                                                        >
+                                                            {isSharing === proj.id ? (
+                                                              <div className="w-4 h-4 border-2 border-current border-t-transparent animate-spin rounded-full" />
+                                                            ) : shareStatus[proj.id] ? (
+                                                              <Check size={14} />
+                                                            ) : (
+                                                              <Share2 size={14} />
+                                                            )}
+                                                        </button>
+                                                        <button onClick={() => deleteProject(proj.id)} className="text-red-500 opacity-60 hover:opacity-100 p-1.5 border border-red-500/20 rounded">
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    </div>
                                                 </div>
+                                                {proj.shared && (
+                                                  <div className="flex items-center gap-2 mb-2 px-2 py-1 bg-green-500/5 border border-green-500/10 rounded">
+                                                    <Link size={10} className="text-green-600 shrink-0" />
+                                                    <span className="text-[10px] font-mono text-green-700 truncate opacity-80">
+                                                      {shareStatus[proj.id] ? t(lang, 'linkCopied') : `${window.location.origin}/?share=${proj.id}`}
+                                                    </span>
+                                                  </div>
+                                                )}
                                                 <button onClick={() => loadProject(proj)} className="w-full border border-[var(--color-fg)]/20 py-2 text-[12px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-colors">{t(lang, 'loadProject')}</button>
                                             </div>
                                         ))}
@@ -1262,7 +1512,24 @@ const CustomZoomControl = () => {
 
       <header className="flex justify-between items-center px-4 md:px-10 py-4 md:py-6 border-b border-[var(--color-fg)]/10 bg-[var(--color-bg)] z-[2000] sticky top-0">
         <div className="flex flex-col md:flex-row md:items-baseline gap-0 md:gap-2">
-          <span className="text-[20px] md:text-[26px] font-serif italic font-bold tracking-tight">Calcare</span>
+          <div className="flex items-baseline gap-2">
+            <span className="text-[20px] md:text-[26px] font-serif italic font-bold tracking-tight">Calcare</span>
+            <AnimatePresence>
+              {autoSaveStatus !== 'idle' && (
+                <motion.div
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -10 }}
+                  className="flex items-center gap-1.5"
+                >
+                  <div className={`w-1.5 h-1.5 rounded-full ${autoSaveStatus === 'saving' ? 'bg-orange-500 animate-pulse' : 'bg-green-500'}`} />
+                  <span className="text-[9px] uppercase tracking-widest font-bold opacity-40">
+                    {autoSaveStatus === 'saving' ? t(lang, 'autoSaving') : t(lang, 'autoSaved')}
+                  </span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
           <span className="text-[10px] md:text-[12px] uppercase tracking-widest opacity-50 hidden sm:inline">V.1 by Rifky Rangga</span>
         </div>
         <div className="flex items-center gap-3 md:gap-8">
@@ -1272,6 +1539,35 @@ const CustomZoomControl = () => {
             <button onClick={() => setActiveModal('settings')} className={`cursor-pointer pb-1 ${activeModal === 'settings' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'utmSettings')}</button>
             <button onClick={() => setActiveModal('export')} className={`cursor-pointer pb-1 ${activeModal === 'export' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'exportData')}</button>
           </nav>
+
+          <div className="flex items-center gap-2 md:gap-4 ml-2 md:ml-0 md:border-l border-[var(--color-fg)]/10 md:pl-4">
+            {isAuthLoading ? (
+              <div className="w-6 h-6 rounded-full border-2 border-[var(--color-fg)]/20 border-t-[var(--color-fg)] animate-spin" />
+            ) : user ? (
+              <div className="flex items-center gap-3">
+                <div className="hidden sm:flex flex-col items-end">
+                  <span className="text-[10px] font-bold uppercase tracking-widest leading-none">{user.displayName || 'User'}</span>
+                  <button onClick={logout} className="text-[8px] uppercase tracking-widest font-black opacity-40 hover:opacity-100 transition-opacity flex items-center gap-1">
+                    <LogOut size={8} /> {t(lang, 'signOut')}
+                  </button>
+                </div>
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt="Avatar" className="w-7 h-7 rounded-full border border-[var(--color-fg)]/10" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="w-7 h-7 rounded-full bg-[var(--color-fg)]/10 flex items-center justify-center">
+                    <UserIcon size={14} className="opacity-40" />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button 
+                onClick={loginWithGoogle}
+                className="flex items-center gap-2 px-3 py-1.5 bg-[var(--color-fg)] text-[var(--color-bg)] text-[10px] uppercase tracking-widest font-bold rounded-sm hover:opacity-90 transition-all shadow-sm"
+              >
+                <LogIn size={12} /> <span className="hidden xs:inline">{t(lang, 'loginWithGoogle')}</span>
+              </button>
+            )}
+          </div>
 
           <div className="flex lg:hidden items-center gap-2">
              <button onClick={() => setActiveModal('library')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'projectLibrary')}><Layers size={16} className="opacity-70"/></button>
@@ -1301,7 +1597,7 @@ const CustomZoomControl = () => {
       <main className="flex-1 flex flex-col md:flex-row overflow-hidden relative mb-[64px] md:mb-0">
         
         {/* Sidebar: Input Points */}
-        <aside className={`${mobileTab === 'points' ? 'flex' : 'hidden md:flex'} w-full md:w-[300px] lg:w-[350px] border-r border-[var(--color-fg)]/10 p-5 lg:p-8 flex flex-col bg-[var(--color-bg)] md:h-full shrink-0 z-[1000] overflow-hidden`}>
+        <aside className={`${mobileTab === 'points' ? 'flex' : 'hidden md:flex'} w-full md:w-[300px] lg:w-[350px] border-r border-[var(--color-fg)]/10 p-5 lg:p-8 flex flex-col bg-[var(--color-bg)] h-full shrink-0 z-[1000] overflow-hidden`}>
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-[12px] uppercase tracking-widest opacity-50 font-bold">{t(lang, 'inputCoordsHeader')}</h2>
             <div className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-widest ${isFreehand ? 'bg-orange-500 text-white' : isEditMode ? 'bg-blue-500 text-white' : 'bg-green-500 text-white'}`}>
@@ -1310,6 +1606,7 @@ const CustomZoomControl = () => {
           </div>
           
           <div className="flex-1 space-y-4 overflow-y-auto pr-2 custom-scrollbar min-h-0">
+            
             {points.map((p, idx) => (
               <div 
                 key={idx} 
@@ -1507,7 +1804,11 @@ const CustomZoomControl = () => {
           {/* Floating Search Container */}
           <div className="absolute top-4 left-4 right-4 md:left-6 md:right-auto md:w-[320px] z-[2000] flex flex-col gap-1">
             <form onSubmit={handleSearch} className="bg-[var(--color-surface)] border border-[var(--color-fg)]/30 shadow-md flex items-center px-4 py-3 group focus-within:border-[var(--color-fg)]">
-              <Search size={14} className="opacity-50 mr-3 group-focus-within:opacity-100 transition-opacity" />
+              {isSearching ? (
+                <div className="w-3.5 h-3.5 border-2 border-[var(--color-fg)]/30 border-t-[var(--color-fg)] rounded-full animate-spin mr-3"></div>
+              ) : (
+                <Search size={14} className="opacity-50 mr-3 group-focus-within:opacity-100 transition-opacity" />
+              )}
               <input 
                  type="text" 
                  placeholder={t(lang, 'searchPlaceholder')} 
@@ -1516,6 +1817,18 @@ const CustomZoomControl = () => {
                  onChange={(e) => setSearchQuery(e.target.value)}
               />
             </form>
+            <AnimatePresence>
+               {isSearching && searchQuery.length > 2 && searchResults.length === 0 && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="bg-[var(--color-bg)]/80 backdrop-blur-sm px-4 py-2 text-[10px] uppercase tracking-widest font-bold border-x border-b border-[var(--color-fg)]/10"
+                  >
+                     {t(lang, 'searching')}...
+                  </motion.div>
+               )}
+            </AnimatePresence>
             <AnimatePresence>
               {isFreehand && (
                 <motion.div
@@ -1550,6 +1863,8 @@ const CustomZoomControl = () => {
                         onClick={() => {
                            setMapCenter([parseFloat(res.lat), parseFloat(res.lon)]);
                            setSelectedResultId(res.place_id);
+                           setSelectedSearchResult(res);
+                           setSearchResults([]); // Sembunyikan hasil setelah memilih
                         }}
                      >
                        <div className="flex flex-col">
@@ -1674,6 +1989,61 @@ const CustomZoomControl = () => {
               <LayersControl.Overlay checked name="Survey Layers">
                 <LayerGroup>
                   <>
+                    {/* Selected Search Result Marker */}
+                    {selectedSearchResult && (
+                      <Marker 
+                        position={[parseFloat(selectedSearchResult.lat), parseFloat(selectedSearchResult.lon)]}
+                        icon={L.divIcon({
+                          className: 'search-result-marker',
+                          html: `<div class="relative">
+                                  <div class="absolute -top-8 -left-4 bg-red-500 w-8 h-8 rounded-full rounded-bl-none rotate-45 border-2 border-white shadow-xl flex items-center justify-center">
+                                    <div class="-rotate-45 text-white"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+                                  </div>
+                                </div>`,
+                          iconSize: [0, 0],
+                          iconAnchor: [0, 0]
+                        })}
+                      >
+                        <Popup className="custom-popup">
+                          <div className="p-2 min-w-[200px]">
+                            <h3 className="font-bold text-[14px] mb-1">{selectedSearchResult.address?.name || selectedSearchResult.display_name.split(',')[0]}</h3>
+                            <p className="text-[11px] opacity-70 mb-3 leading-relaxed">{selectedSearchResult.display_name}</p>
+                            <div className="grid grid-cols-2 gap-2 mb-3">
+                              <div className="bg-gray-100 p-2 rounded">
+                                <span className="text-[8px] uppercase opacity-50 block">Latitude</span>
+                                <span className="text-[10px] font-mono">{parseFloat(selectedSearchResult.lat).toFixed(6)}</span>
+                              </div>
+                              <div className="bg-gray-100 p-2 rounded">
+                                <span className="text-[8px] uppercase opacity-50 block">Longitude</span>
+                                <span className="text-[10px] font-mono">{parseFloat(selectedSearchResult.lon).toFixed(6)}</span>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => {
+                                const newPoint = { 
+                                  lat: parseFloat(selectedSearchResult.lat), 
+                                  lng: parseFloat(selectedSearchResult.lon), 
+                                  color: DEFAULT_POINT_COLOR 
+                                };
+                                setPoints([...points, newPoint]);
+                                setSelectedSearchResult(null);
+                                setSelectedResultId(null);
+                              }}
+                              className="w-full py-2 bg-[var(--color-fg)] text-[var(--color-bg)] rounded text-[10px] uppercase tracking-widest font-bold hover:opacity-90 transition-opacity"
+                            >
+                              Tambah sebagai Titik Ukur
+                            </button>
+                            <button 
+                              onClick={() => setSelectedSearchResult(null)}
+                              className="w-full mt-2 py-2 border border-[var(--color-fg)]/10 text-[var(--color-fg)] rounded text-[10px] uppercase tracking-widest font-bold hover:bg-gray-50 transition-colors"
+                            >
+                              Tutup
+                            </button>
+                          </div>
+                        </Popup>
+                      </Marker>
+                    )}
+
                     {/* Polygon */}
                     {points.length > 2 && (
                       <Polygon 
@@ -1717,10 +2087,10 @@ const CustomZoomControl = () => {
                     {/* Plot points */}
                     {points.map((p, idx) => {
                       const markerIcon = L.divIcon({
-                        className: `custom-div-icon ${selectedPointIndex === idx ? 'selected' : ''}`,
-                        html: `<div class="marker-inner" style="background-color: ${p.color || DEFAULT_POINT_COLOR}; width: 10px; height: 10px; border: 2px solid white; border-radius: 50%;"></div>`,
-                        iconSize: [10, 10],
-                        iconAnchor: [5, 5]
+                        className: `custom-div-icon group ${selectedPointIndex === idx ? 'selected' : ''}`,
+                        html: `<div class="marker-inner shadow-lg transition-all duration-300" style="background-color: ${p.color || DEFAULT_POINT_COLOR}; width: 12px; height: 12px; border: 2.5px solid white; border-radius: 50%;"></div>`,
+                        iconSize: [12, 12],
+                        iconAnchor: [6, 6]
                       });
 
                       return (
@@ -1735,6 +2105,7 @@ const CustomZoomControl = () => {
                               setSelectedPointIndex(idx);
                               setIsEditMode(true);
                               setIsFreehand(false);
+                              setMapCenter([p.lat, p.lng]);
                             },
                             dragstart: () => {
                               setSelectedPointIndex(idx);
@@ -1845,7 +2216,7 @@ const CustomZoomControl = () => {
         </section>
 
         {/* Right: Results Panel */}
-        <aside className={`${mobileTab === 'stats' ? 'flex' : 'hidden md:flex'} w-full md:w-[320px] lg:w-[380px] p-5 lg:p-8 bg-[var(--color-surface)] border-l border-[var(--color-fg)]/10 flex flex-col z-[1000] shrink-0 md:h-full overflow-y-auto`}>
+        <aside className={`${mobileTab === 'stats' ? 'flex' : 'hidden md:flex'} w-full md:w-[320px] lg:w-[380px] p-5 lg:p-8 bg-[var(--color-surface)] border-l border-[var(--color-fg)]/10 flex flex-col z-[1000] shrink-0 h-full overflow-y-auto`}>
           <div className="flex items-center justify-between mb-10">
             <h2 className="text-[12px] uppercase tracking-widest opacity-50 font-bold">02 // {t(lang, 'metricsHover')}</h2>
             <AnimatePresence>
@@ -1936,6 +2307,30 @@ const CustomZoomControl = () => {
             >
               <Download size={16} /> {t(lang, 'exportData')}
             </button>
+            
+            {currentProjectId && user && (
+              <button 
+                onClick={() => {
+                  const proj = savedProjects.find(p => p.id === currentProjectId);
+                  if (proj) handleShareProject(proj);
+                }}
+                disabled={isSharing !== null || !savedProjects.find(p => p.id === currentProjectId)}
+                className={`w-full py-3 border border-current text-[11px] uppercase tracking-widest font-bold flex items-center justify-center gap-2 transition-all ${
+                  savedProjects.find(p => p.id === currentProjectId && p.shared) 
+                    ? 'bg-green-500/10 border-green-500/30 text-green-600' 
+                    : 'bg-transparent border-[var(--color-fg)]/20 text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'
+                }`}
+              >
+                {isSharing === currentProjectId ? (
+                  <div className="w-4 h-4 border-2 border-current border-t-transparent animate-spin rounded-full" />
+                ) : shareStatus[String(currentProjectId)] ? (
+                  <><Check size={14} /> {t(lang, 'linkCopied')}</>
+                ) : (
+                  <><Share2 size={14} /> {savedProjects.find(p => p.id === currentProjectId && p.shared) ? t(lang, 'unshare') : t(lang, 'shareProject')}</>
+                )}
+              </button>
+            )}
+            
             <div className="p-4 bg-[var(--color-bg)] border-l-2 border-[var(--color-fg)] flex items-center justify-between">
               <span className="text-[12px] uppercase tracking-wider font-bold">Project Status</span>
               {points.length < 3 ? (

@@ -1,0 +1,55 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "A saved measurement project with geographic points.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "userId": { "type": "string" },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "lat": { "type": "number" },
+              "lng": { "type": "number" },
+              "color": { "type": "string" }
+            },
+            "required": ["lat", "lng"]
+          }
+        },
+        "date": { "type": "string", "format": "date-time" },
+        "areaSqMeters": { "type": "number" },
+        "perimeter": { "type": "number" },
+        "unit": { "type": "string" },
+        "shared": { "type": "boolean" }
+      },
+      "required": ["id", "name", "userId", "points", "date"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile information.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "email"]
+    }
+  },
+  "firestore": {
+    "projects": {
+      "schema": "Project",
+      "description": "User measurement projects collection"
+    },
+    "users": {
+      "schema": "User",
+      "description": "Users collection"
+    }
+  }
+}
