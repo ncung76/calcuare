@@ -1,8 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { auth, loginWithGoogle, logout } from './lib/firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import * as firebaseService from './services/firebaseService';
-import { MapContainer, TileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup } from 'react-leaflet';
+import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup } from 'react-leaflet';
 import * as turf from '@turf/turf';
 import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link } from 'lucide-react';
 import { toPng } from 'html-to-image';
@@ -386,6 +383,23 @@ function calculateStats(points: {lat: number, lng: number}[]) {
 }
 
 // === KOMPONEN UTAMA ===
+const DEFAULT_WMS_LAYERS = [
+  { name: 'Heatmap Desa (v1)', layers: 'dorado:plot_heatmap_ml_desa_v1' },
+  { name: 'Zona Usage', layers: 'dorado:zona_usage' },
+  { name: 'Batas Kecamatan', layers: 'dorado:adm_reg_kecamatan' },
+  { name: 'Heatmap Kecamatan (v4)', layers: 'dorado:plot_heatmap_ml_kecamatan_v4' },
+  { name: 'Batas Provinsi', layers: 'dorado:adm_reg_province' },
+  { name: 'Heatmap Desa', layers: 'dorado:plot_heatmap_ml_desa' },
+  { name: 'Heatmap Desa (v4)', layers: 'dorado:plot_heatmap_ml_desa_v4' },
+  { name: 'Heatmap ML (v4)', layers: 'dorado:plot_heatmap_ml_v4' },
+  { name: 'Heatmap Kabupaten (v4)', layers: 'dorado:plot_heatmap_ml_kabupaten_v4' },
+  { name: 'Batas Kabupaten', layers: 'dorado:adm_reg_kabupaten' },
+  { name: 'RDTR', layers: 'dorado:rdtr' },
+  { name: 'Heatmap Provinsi (v4)', layers: 'dorado:plot_heatmap_ml_province_v4' },
+  { name: 'Dinamika Zona Nilai', layers: 'dorado:dynamica_zona_nilai' },
+  { name: 'Batas Desa', layers: 'dorado:adm_reg_desa' }
+];
+
 export default function App() {
   const [points, setPoints] = useState<{lat: number, lng: number, color: string}[]>([]);
   const [stats, setStats] = useState(calculateStats([]));
@@ -401,6 +415,9 @@ export default function App() {
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
   const [selectedSearchResult, setSelectedSearchResult] = useState<any | null>(null);
   const [isFreehand, setIsFreehand] = useState(false);
+  const [isAutoDetect, setIsAutoDetect] = useState(false);
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [showPlotSizes, setShowPlotSizes] = useState(false);
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [measurePoints, setMeasurePoints] = useState<[number, number][]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -411,12 +428,19 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
 
   // Modal State
-  const [activeModal, setActiveModal] = useState<'none' | 'library' | 'settings' | 'export'>('none');
+  const [activeModal, setActiveModal] = useState<'none' | 'library' | 'settings' | 'export' | 'import'>('none');
   const [savedProjects, setSavedProjects] = useState<any[]>([]);
   const [newProjectName, setNewProjectName] = useState('');
+  const [importText, setImportText] = useState('');
+
+  // WMS Filter State
+  const [wmsOpacity, setWmsOpacity] = useState(0.7);
+  const [wmsHue, setWmsHue] = useState(0);
+  const [wmsInvert, setWmsInvert] = useState(false);
 
   // Settings State
   const [units, setUnits] = useState<'metric' | 'imperial'>('metric');
+  const [wmsLayersList, setWmsLayersList] = useState<{name: string, layers: string}[]>([]);
   const [showGrid, setShowGrid] = useState(true);
   const [areaUnit, setAreaUnit] = useState<'are' | 'ha' | 'sqm'>('are');
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -431,9 +455,8 @@ export default function App() {
   const [isSharing, setIsSharing] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<{[key: string]: boolean}>({});
 
-  // Auth State
-  const [user, setUser] = useState<User | null>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const user = null;
+  const isAuthLoading = false;
 
   const handleNewProject = useCallback(() => {
      // Clear current workspace completely and immediately
@@ -475,55 +498,54 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSettingUpSheet, setIsSettingUpSheet] = useState(false);
 
-  // Initial Auth & Data Load
-  useEffect(() => {
-    firebaseService.testConnection();
 
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setIsAuthLoading(false);
-      if (u) {
-        firebaseService.saveUserProfile();
-        // Fetch from cloud when logged in
-        firebaseService.fetchUserProjects().then(cloudProjs => {
-          if (cloudProjs && cloudProjs.length > 0) {
-            setSavedProjects(cloudProjs);
-          }
-        });
-      }
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const shareId = params.get('share');
-    if (shareId) {
-      const loadSharedProject = async () => {
-        try {
-          const project = await firebaseService.getProjectById(shareId);
-          if (project) {
-            setPoints(project.points);
-            setCurrentProjectId(project.id);
-            setNewProjectName(project.name || "");
-            if (project.points.length > 0) {
-              setMapCenter([project.points[0].lat, project.points[0].lng]);
-            }
-          } else {
-            console.warn("Shared project not found or access denied");
-          }
-        } catch (err) {
-          console.error("Failed to load shared project:", err);
-        }
-      };
-      loadSharedProject();
-    }
-  }, []);
 
   useEffect(() => {
     localStorage.setItem('calcare_area_unit', areaUnit);
   }, [areaUnit]);
+
+  // Fetch GeoServer Layers dynamically
+  useEffect(() => {
+    const fetchWmsLayers = async () => {
+      try {
+        const response = await fetch('https://geo2.perare.io/geoserver/dorado/wms?service=WMS&version=1.3.0&request=GetCapabilities');
+        if (!response.ok) throw new Error('Network response was not ok');
+        const text = await response.text();
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(text, 'text/xml');
+        
+        const layerNodes = xmlDoc.querySelectorAll('Layer');
+        const layers: {name: string, layers: string}[] = [];
+        
+        layerNodes.forEach(node => {
+          const nameNode = node.querySelector(':scope > Name');
+          const titleNode = node.querySelector(':scope > Title');
+          const childLayers = node.querySelectorAll(':scope > Layer');
+          
+          if (nameNode && nameNode.textContent && childLayers.length === 0) {
+            let name = nameNode.textContent;
+            let title = titleNode ? titleNode.textContent : name;
+            // Often titles are better
+            if (title && title.trim()) {
+              layers.push({ name: title.trim(), layers: name.trim() });
+            } else {
+              layers.push({ name: name.trim(), layers: name.trim() });
+            }
+          }
+        });
+        
+        if (layers.length > 0) {
+          setWmsLayersList(layers);
+        } else {
+          setWmsLayersList(DEFAULT_WMS_LAYERS);
+        }
+      } catch (err) {
+        console.error("Failed to fetch WMS layers:", err);
+        setWmsLayersList(DEFAULT_WMS_LAYERS);
+      }
+    };
+    fetchWmsLayers();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('calcare_area_precision', String(areaPrecision));
@@ -634,15 +656,6 @@ export default function App() {
         localStorage.setItem('geocalc_projects', JSON.stringify(updated));
         return updated;
       });
-
-      // 3. Sync to Cloud if logged in
-      if (user && projectToSync) {
-        try {
-          await firebaseService.saveProject(projectToSync);
-        } catch (err) {
-          console.error("Cloud auto-save failed", err);
-        }
-      }
 
       setAutoSaveStatus('saved');
       setTimeout(() => setAutoSaveStatus('idle'), 2000);
@@ -804,8 +817,8 @@ export default function App() {
 
       setIsSearching(true);
       try {
-          // Tambahkan bounded, countrycodes, dan namedetails untuk hasil yang lebih akurat
-          const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&namedetails=1&countrycodes=id&limit=10&q=${encodeURIComponent(searchQuery)}`);
+          // Tambahkan bounded, countrycodes, namedetails dan polygon_geojson untuk hasil yang lebih akurat dan poligon
+          const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&namedetails=1&countrycodes=id&limit=10&polygon_geojson=1&q=${encodeURIComponent(searchQuery)}`);
           const data = await res.json();
           if (Array.isArray(data)) {
               setSearchResults(data);
@@ -1040,6 +1053,61 @@ export default function App() {
      setActiveModal('none');
   };
 
+  const extractCoords = (obj: any): any[] => {
+    let coords: any[] = [];
+    if (Array.isArray(obj)) {
+      if (obj.length >= 2 && typeof obj[0] === 'number' && typeof obj[1] === 'number') {
+        coords.push(obj); // [lng, lat]
+      } else {
+        for (const item of obj) {
+          coords = coords.concat(extractCoords(item));
+        }
+      }
+    } else if (typeof obj === 'object' && obj !== null) {
+        if (obj.coordinates) {
+            coords = coords.concat(extractCoords(obj.coordinates));
+        } else if (obj.geometry) {
+            coords = coords.concat(extractCoords(obj.geometry));
+        } else if (obj.features) {
+            coords = coords.concat(extractCoords(obj.features));
+        }
+    }
+    return coords;
+  };
+
+  const handleImportJSON = () => {
+    try {
+      if (!importText.trim()) return;
+      const data = JSON.parse(importText);
+      const coords = extractCoords(data);
+      
+      let newPts = coords.map((c: any) => ({
+        lat: c[1], lng: c[0], color: DEFAULT_POINT_COLOR
+      })).filter(p => p.lat !== undefined && p.lng !== undefined && !isNaN(p.lat) && !isNaN(p.lng));
+
+      if (newPts.length > 2) {
+        const first = newPts[0];
+        const last = newPts[newPts.length - 1];
+        if (Math.abs(first.lat - last.lat) < 0.000001 && Math.abs(first.lng - last.lng) < 0.000001) {
+          newPts.pop();
+        }
+      }
+
+      if (newPts.length > 0) {
+        // clear existing space and paste this
+        setPoints(newPts);
+        setMapCenter([newPts[0].lat, newPts[0].lng]);
+        setImportText('');
+        setActiveModal('none');
+        setCurrentProjectId(null);
+      } else {
+        alert("Tidak menemukan data titik koordinat dalam format: [longitude, latitude]");
+      }
+    } catch (e) {
+      alert("Error parsing JSON. Pastikan format JSON benar.");
+    }
+  };
+
   const handleSaveProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProjectName.trim()) return;
@@ -1056,15 +1124,6 @@ export default function App() {
         unit: areaUnit,
         shared: false
     };
-    
-    // Cloud Save
-    if (user) {
-        try {
-            await firebaseService.saveProject(newProj);
-        } catch (err) {
-            console.error("Cloud save failed", err);
-        }
-    }
     
     // Local Save
     const updated = [newProj, ...savedProjects];
@@ -1126,25 +1185,17 @@ export default function App() {
   };
 
   const deleteProject = async (id: any) => {
-    if (user) {
-      try {
-        await firebaseService.deleteUserProject(String(id));
-      } catch (err) {
-        console.error("Failed to delete from cloud", err);
-      }
-    }
+    // Local Delete
     const updated = savedProjects.filter(p => p.id !== id);
     setSavedProjects(updated);
     localStorage.setItem('geocalc_projects', JSON.stringify(updated));
   };
 
   const handleShareProject = async (proj: any) => {
-    if (!user) return;
     setIsSharing(proj.id);
     const newShareStatus = !proj.shared;
     
     try {
-      await firebaseService.updateProjectShare(proj.id, newShareStatus);
       const updatedProjects = savedProjects.map(p => 
         p.id === proj.id ? { ...p, shared: newShareStatus } : p
       );
@@ -1166,9 +1217,59 @@ export default function App() {
     }
   };
 
-  const MapClickHandler = ({ disabled }: { disabled?: boolean }) => {
+  const MapClickHandler = ({ disabled, autoDetectActive }: { disabled?: boolean, autoDetectActive?: boolean }) => {
+    const map = useMap();
     useMapEvents({
-      click(e) {
+      click: async (e) => {
+        if (autoDetectActive) {
+            setIsDetecting(true);
+            try {
+                const bounds = map.getBounds();
+                const size = map.getSize();
+                const x = Math.round(e.containerPoint.x);
+                const y = Math.round(e.containerPoint.y);
+
+                // Target all mapped GeoServer layers for query
+                const queryLayers = wmsLayersList.map(l => l.layers).slice(0, 20).join(',');
+
+                const u = `https://geo2.perare.io/geoserver/dorado/wms?request=GetFeatureInfo&service=WMS&srs=EPSG:4326&version=1.1.1&format=image/png&bbox=${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}&height=${size.y}&width=${size.x}&layers=${queryLayers}&query_layers=${queryLayers}&info_format=application/json&x=${x}&y=${y}&feature_count=1`;
+                
+                const response = await fetch(u);
+                if (!response.ok) throw new Error('Network error');
+                const data = await response.json();
+                
+                if (data.features && data.features.length > 0) {
+                   const feature = data.features[0];
+                   if (feature.geometry && (feature.geometry.type === 'Polygon' || feature.geometry.type === 'MultiPolygon')) {
+                       let coords = feature.geometry.coordinates;
+                       if (feature.geometry.type === 'MultiPolygon') {
+                           coords = coords[0];
+                       }
+                       const ring = coords[0];
+                       // GeoJSON is [lng, lat]
+                       const newPoints = ring.map((pt: number[]) => ({ lat: pt[1], lng: pt[0], color: DEFAULT_POINT_COLOR }));
+                       if (newPoints.length > 1 && newPoints[0].lat === newPoints[newPoints.length-1].lat && newPoints[0].lng === newPoints[newPoints.length-1].lng) {
+                           newPoints.pop();
+                       }
+                       
+                       setPoints(newPoints);
+                       setShowPlotSizes(false); 
+                       setIsAutoDetect(false);
+                   } else {
+                       alert(t(lang, 'plotNotFound') || "Plot tidak ditemukan atau geometri tidak sesuai.");
+                   }
+                } else {
+                   alert(t(lang, 'plotNotFound') || "Tidak ada plot di koordinat tersebut.");
+                }
+            } catch(err) {
+                console.error("Auto detect failed", err);
+                alert("Gagal mengambil data dari GeoServer");
+            } finally {
+                setIsDetecting(false);
+            }
+            return;
+        }
+
         if (disabled) return;
         setPoints(pts => [...pts, { lat: e.latlng.lat, lng: e.latlng.lng, color: DEFAULT_POINT_COLOR }]);
         setSearchResults([]);
@@ -1297,6 +1398,7 @@ const CustomZoomControl = () => {
                         {activeModal === 'library' && 'Project Library'}
                         {activeModal === 'settings' && 'UTM Settings'}
                         {activeModal === 'export' && 'Export Data'}
+                        {activeModal === 'import' && 'Import Data'}
                     </h3>
                     <button onClick={() => setActiveModal('none')} className="text-[12px] uppercase tracking-widest font-bold opacity-50 hover:opacity-100">Close [X]</button>
                 </div>
@@ -1311,13 +1413,6 @@ const CustomZoomControl = () => {
                             >
                                 <Plus size={14} /> {t(lang, 'newProject')}
                             </button>
-
-                            {!user && (
-                                <div className="bg-orange-500/5 border border-orange-500/20 p-4 rounded text-[11px] uppercase tracking-widest font-bold text-orange-600 dark:text-orange-400 flex items-center justify-between">
-                                    <span>{t(lang, 'loginToSave')}</span>
-                                    <button onClick={loginWithGoogle} className="bg-orange-500 text-white px-3 py-1 rounded text-[9px]">{t(lang, 'loginWithGoogle')}</button>
-                                </div>
-                            )}
 
                             <div>
                                 <form onSubmit={handleSaveProject} className="flex gap-2">
@@ -1468,11 +1563,76 @@ const CustomZoomControl = () => {
                                     label={t(lang, 'showGrid')} 
                                 />
                             </div>
+
+                            <hr className="border-[var(--color-fg)]/10" />
+
+                            <div>
+                                <label className="text-[12px] uppercase opacity-40 block mb-4">WMS Layer Config</label>
+                                <div className="space-y-4">
+                                  <div>
+                                    <div className="flex justify-between mb-1">
+                                      <span className="text-[12px]">Opacity</span>
+                                      <span className="text-[12px] font-mono">{Math.round(wmsOpacity * 100)}%</span>
+                                    </div>
+                                    <input 
+                                      type="range" min="0" max="1" step="0.1"
+                                      value={wmsOpacity} onChange={(e) => setWmsOpacity(parseFloat(e.target.value))}
+                                      className="w-full accent-[var(--color-fg)]"
+                                    />
+                                  </div>
+                                  <div>
+                                    <div className="flex justify-between mb-1">
+                                      <span className="text-[12px]">Hue Filter</span>
+                                      <span className="text-[12px] font-mono">{wmsHue}deg</span>
+                                    </div>
+                                    <input 
+                                      type="range" min="0" max="360" step="10"
+                                      value={wmsHue} onChange={(e) => setWmsHue(parseFloat(e.target.value))}
+                                      className="w-full accent-[var(--color-fg)]"
+                                    />
+                                  </div>
+                                  <div>
+                                    <Toggle 
+                                      checked={wmsInvert} 
+                                      onChange={setWmsInvert} 
+                                      label="Invert Colors" 
+                                    />
+                                  </div>
+                                </div>
+                            </div>
                             
                             <div className="bg-[var(--color-bg)] p-4 border border-[var(--color-fg)]/10 text-[13px] font-mono opacity-70 whitespace-pre-line">
                                 <strong>{t(lang, 'crsInfoTitle')}</strong><br/>
                                 {t(lang, 'crsInfoText')}
                             </div>
+                        </div>
+                    )}
+
+                    {/* Import Modal */}
+                    {activeModal === 'import' && (
+                        <div className="space-y-4">
+                            <p className="text-[15px] opacity-80 mb-2">Import data polygon menggunakan GeoJSON atau raw array koordinat.</p>
+                            <div className="bg-[var(--color-fg)]/5 p-4 border-l-2 border-[var(--color-fg)] font-mono text-[11px] mb-4 overflow-x-auto">
+                               {`Contoh Format (Bisa didapat dari Network Tab):
+{
+  "coordinates": [
+    [ [115.184..., -8.808...], [115.185..., -8.808...] ]
+  ]
+}`}
+                            </div>
+                            <textarea 
+                                value={importText}
+                                onChange={(e) => setImportText(e.target.value)}
+                                placeholder="Paste JSON response di sini..."
+                                className="w-full h-48 p-3 text-[12px] font-mono border border-[var(--color-fg)]/20 bg-transparent rounded focus:outline-none focus:border-[var(--color-fg)]"
+                            />
+                            <button 
+                                onClick={handleImportJSON} 
+                                disabled={!importText.trim()} 
+                                className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-3 text-[12px] uppercase tracking-widest font-bold mt-2 disabled:opacity-50 transition-all"
+                            >
+                                Parse & Import Data
+                            </button>
                         </div>
                     )}
 
@@ -1537,41 +1697,20 @@ const CustomZoomControl = () => {
             <button onClick={() => setActiveModal('none')} className={`cursor-pointer pb-1 ${activeModal === 'none' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'surveyorMode')}</button>
             <button onClick={() => setActiveModal('library')} className={`cursor-pointer pb-1 ${activeModal === 'library' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'projectLibrary')}</button>
             <button onClick={() => setActiveModal('settings')} className={`cursor-pointer pb-1 ${activeModal === 'settings' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'utmSettings')}</button>
+            <button onClick={() => setActiveModal('import')} className={`cursor-pointer pb-1 ${activeModal === 'import' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>Import Data</button>
             <button onClick={() => setActiveModal('export')} className={`cursor-pointer pb-1 ${activeModal === 'export' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'exportData')}</button>
           </nav>
 
           <div className="flex items-center gap-2 md:gap-4 ml-2 md:ml-0 md:border-l border-[var(--color-fg)]/10 md:pl-4">
-            {isAuthLoading ? (
-              <div className="w-6 h-6 rounded-full border-2 border-[var(--color-fg)]/20 border-t-[var(--color-fg)] animate-spin" />
-            ) : user ? (
-              <div className="flex items-center gap-3">
-                <div className="hidden sm:flex flex-col items-end">
-                  <span className="text-[10px] font-bold uppercase tracking-widest leading-none">{user.displayName || 'User'}</span>
-                  <button onClick={logout} className="text-[8px] uppercase tracking-widest font-black opacity-40 hover:opacity-100 transition-opacity flex items-center gap-1">
-                    <LogOut size={8} /> {t(lang, 'signOut')}
-                  </button>
-                </div>
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt="Avatar" className="w-7 h-7 rounded-full border border-[var(--color-fg)]/10" referrerPolicy="no-referrer" />
-                ) : (
-                  <div className="w-7 h-7 rounded-full bg-[var(--color-fg)]/10 flex items-center justify-center">
-                    <UserIcon size={14} className="opacity-40" />
-                  </div>
-                )}
-              </div>
-            ) : (
-              <button 
-                onClick={loginWithGoogle}
-                className="flex items-center gap-2 px-3 py-1.5 bg-[var(--color-fg)] text-[var(--color-bg)] text-[10px] uppercase tracking-widest font-bold rounded-sm hover:opacity-90 transition-all shadow-sm"
-              >
-                <LogIn size={12} /> <span className="hidden xs:inline">{t(lang, 'loginWithGoogle')}</span>
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-bold uppercase tracking-widest leading-none px-2 py-1 bg-[var(--color-fg)]/10 rounded-sm">LOCAL MODE</span>
+            </div>
           </div>
 
           <div className="flex lg:hidden items-center gap-2">
              <button onClick={() => setActiveModal('library')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'projectLibrary')}><Layers size={16} className="opacity-70"/></button>
              <button onClick={() => setActiveModal('settings')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'utmSettings')}><Settings size={16} className="opacity-70" /></button>
+             <button onClick={() => setActiveModal('import')} className="p-2 border border-[var(--color-fg)]/10 rounded" title="Import Data"><FileJson size={16} className="opacity-70"/></button>
              <button onClick={() => setActiveModal('export')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'exportData')}><Download size={16} className="opacity-70"/></button>
           </div>
           
@@ -1774,6 +1913,29 @@ const CustomZoomControl = () => {
                   {isFreehand ? t(lang, 'freehandActive') : t(lang, 'freehand')}
                 </button>
               </div>
+
+              <div className="mb-2">
+                <button 
+                  onClick={() => {
+                    const next = !isAutoDetect;
+                    setIsAutoDetect(next);
+                    if (next) {
+                      setIsFreehand(false);
+                      setIsEditMode(false);
+                      setIsMeasuring(false);
+                      setIsDrawing(false);
+                    }
+                  }}
+                  className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-all flex justify-center items-center gap-2 shadow-sm ${(isAutoDetect || isDetecting) ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
+                >
+                  {(isDetecting) ? (
+                     <div className="w-3 h-3 border-2 border-inherit border-t-transparent animate-spin rounded-full" />
+                  ) : (
+                     <Crosshair size={14} /> 
+                  )}
+                  {isAutoDetect ? "CLICK MAP TO DETECT" : isDetecting ? "DETECTING..." : "AUTO DETECT PLOT"}
+                </button>
+              </div>
               
               <div className="grid grid-cols-2 gap-2">
                 <button 
@@ -1934,11 +2096,17 @@ const CustomZoomControl = () => {
                 )}
             </AnimatePresence>
 
+            <style>{`
+              .leaflet-layer.custom-wms-layer {
+                 filter: hue-rotate(${wmsHue}deg) invert(${wmsInvert ? 1 : 0}) !important;
+              }
+            `}</style>
+
             <MapContainer 
               center={[-8.6705, 115.2126]} 
             zoom={12} 
             maxZoom={24}
-            className={`w-full h-full z-10 ${(!isEditMode || isFreehand || isMeasuring) ? 'cursor-crosshair' : ''}`}
+            className={`w-full h-full z-10 ${(!isEditMode || isFreehand || isMeasuring) ? 'cursor-crosshair' : ''} ${isAutoDetect ? 'cursor-help' : ''}`}
             zoomControl={false}
             attributionControl={false}
           >
@@ -1986,6 +2154,21 @@ const CustomZoomControl = () => {
                 />
               </LayersControl.BaseLayer>
 
+              {/* GeoServer Dorado WMS Layers */}
+              {wmsLayersList.map((layer, idx) => (
+                <LayersControl.Overlay key={idx} name={layer.name.startsWith('GeoServer') ? layer.name : `GeoServer - ${layer.name}`}>
+                  <WMSTileLayer
+                    url="https://geo2.perare.io/geoserver/dorado/wms"
+                    layers={layer.layers}
+                    format="image/png"
+                    transparent={true}
+                    maxZoom={24}
+                    opacity={wmsOpacity}
+                    className="custom-wms-layer"
+                  />
+                </LayersControl.Overlay>
+              ))}
+
               <LayersControl.Overlay checked name="Survey Layers">
                 <LayerGroup>
                   <>
@@ -2031,11 +2214,54 @@ const CustomZoomControl = () => {
                               }}
                               className="w-full py-2 bg-[var(--color-fg)] text-[var(--color-bg)] rounded text-[10px] uppercase tracking-widest font-bold hover:opacity-90 transition-opacity"
                             >
-                              Tambah sebagai Titik Ukur
+                              Tambah Titik (Center)
                             </button>
+                            {selectedSearchResult.geojson && selectedSearchResult.geojson.type === 'Polygon' && (
+                              <button 
+                                onClick={() => {
+                                  const coords = selectedSearchResult.geojson.coordinates[0];
+                                  const newPoints = coords.slice(0, -1).map((c: number[]) => ({
+                                    lat: c[1],
+                                    lng: c[0],
+                                    color: DEFAULT_POINT_COLOR,
+                                  }));
+                                  setPoints(newPoints);
+                                  if (newPoints.length > 0) {
+                                    setMapCenter([newPoints[0].lat, newPoints[0].lng]);
+                                  }
+                                  setSelectedSearchResult(null);
+                                  setSelectedResultId(null);
+                                }}
+                                className="w-full mt-2 py-2 bg-orange-500 text-white rounded text-[10px] uppercase tracking-widest font-bold hover:bg-orange-600 transition-colors"
+                              >
+                                Ambil Polygon Area ({selectedSearchResult.geojson.coordinates[0].length - 1} Titik)
+                              </button>
+                            )}
+                            {selectedSearchResult.geojson && selectedSearchResult.geojson.type === 'MultiPolygon' && (
+                              <button 
+                                onClick={() => {
+                                  // Mengambil polygon pertama (terluar)
+                                  const coords = selectedSearchResult.geojson.coordinates[0][0];
+                                  const newPoints = coords.slice(0, -1).map((c: number[]) => ({
+                                    lat: c[1],
+                                    lng: c[0],
+                                    color: DEFAULT_POINT_COLOR,
+                                  }));
+                                  setPoints(newPoints);
+                                  if (newPoints.length > 0) {
+                                    setMapCenter([newPoints[0].lat, newPoints[0].lng]);
+                                  }
+                                  setSelectedSearchResult(null);
+                                  setSelectedResultId(null);
+                                }}
+                                className="w-full mt-2 py-2 bg-orange-500 text-white rounded text-[10px] uppercase tracking-widest font-bold hover:bg-orange-600 transition-colors"
+                              >
+                                Ambil Polygon Area Utama ({selectedSearchResult.geojson.coordinates[0][0].length - 1} Titik)
+                              </button>
+                            )}
                             <button 
                               onClick={() => setSelectedSearchResult(null)}
-                              className="w-full mt-2 py-2 border border-[var(--color-fg)]/10 text-[var(--color-fg)] rounded text-[10px] uppercase tracking-widest font-bold hover:bg-gray-50 transition-colors"
+                              className="w-full mt-2 py-2 border border-[var(--color-fg)]/10 text-[var(--color-fg)] rounded text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)]/5 transition-colors"
                             >
                               Tutup
                             </button>
@@ -2055,11 +2281,17 @@ const CustomZoomControl = () => {
                           weight: 2,
                           lineJoin: 'miter'
                         }} 
+                        eventHandlers={{ 
+                            click: (e) => {
+                                L.DomEvent.stopPropagation(e as unknown as Event);
+                                setShowPlotSizes((prev) => !prev);
+                            }
+                        }}
                       />
                     )}
 
                     {/* Dimensional Marker Line */}
-                    {points.length > 2 && stats.longestLine && (
+                    {points.length > 2 && stats.longestLine && showPlotSizes && (
                       <Polyline 
                         positions={[
                            [stats.longestLine.geometry.coordinates[0][1], stats.longestLine.geometry.coordinates[0][0]],
@@ -2075,7 +2307,7 @@ const CustomZoomControl = () => {
                     )}
 
                     {/* Render Edge Lengths */}
-                    {stats.edges?.map((e: any, idx: number) => {
+                    {showPlotSizes && stats.edges?.map((e: any, idx: number) => {
                         const labelIcon = L.divIcon({
                             className: 'bg-[var(--color-surface)] border border-[var(--color-fg)]/10 px-1.5 py-0.5 rounded text-[12px] font-mono font-bold text-[var(--color-fg)] whitespace-nowrap shadow-md text-center !ml-[-50%] !mt-[-12px] opacity-90',
                             html: `<div>${e.distance.toFixed(1)}m</div>`,
@@ -2194,7 +2426,7 @@ const CustomZoomControl = () => {
               </LayersControl.Overlay>
             </LayersControl>
             
-            <MapClickHandler disabled={isFreehand || isEditMode || isMeasuring} />
+            <MapClickHandler disabled={isFreehand || isEditMode || isMeasuring} autoDetectActive={isAutoDetect} />
             <FreehandHandler 
                 active={isFreehand} 
                 isDrawing={isDrawing} 
@@ -2308,28 +2540,7 @@ const CustomZoomControl = () => {
               <Download size={16} /> {t(lang, 'exportData')}
             </button>
             
-            {currentProjectId && user && (
-              <button 
-                onClick={() => {
-                  const proj = savedProjects.find(p => p.id === currentProjectId);
-                  if (proj) handleShareProject(proj);
-                }}
-                disabled={isSharing !== null || !savedProjects.find(p => p.id === currentProjectId)}
-                className={`w-full py-3 border border-current text-[11px] uppercase tracking-widest font-bold flex items-center justify-center gap-2 transition-all ${
-                  savedProjects.find(p => p.id === currentProjectId && p.shared) 
-                    ? 'bg-green-500/10 border-green-500/30 text-green-600' 
-                    : 'bg-transparent border-[var(--color-fg)]/20 text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'
-                }`}
-              >
-                {isSharing === currentProjectId ? (
-                  <div className="w-4 h-4 border-2 border-current border-t-transparent animate-spin rounded-full" />
-                ) : shareStatus[String(currentProjectId)] ? (
-                  <><Check size={14} /> {t(lang, 'linkCopied')}</>
-                ) : (
-                  <><Share2 size={14} /> {savedProjects.find(p => p.id === currentProjectId && p.shared) ? t(lang, 'unshare') : t(lang, 'shareProject')}</>
-                )}
-              </button>
-            )}
+
             
             <div className="p-4 bg-[var(--color-bg)] border-l-2 border-[var(--color-fg)] flex items-center justify-between">
               <span className="text-[12px] uppercase tracking-wider font-bold">Project Status</span>

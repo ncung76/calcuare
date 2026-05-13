@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Calcare</string>
+    <string name="title_activity_main">Calcare</string>
+    <string name="package_name">com.calcare.app</string>
+    <string name="custom_url_scheme">com.calcare.app</string>
+</resources>
