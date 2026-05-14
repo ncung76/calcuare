@@ -7,6 +7,8 @@ import { jsPDF } from 'jspdf';
 import L from 'leaflet';
 import { motion, AnimatePresence } from 'motion/react';
 import { translations, Language, t } from './locales';
+import Drawing from 'dxf-writer';
+import * as utm from 'utm';
 
 const hexToRgb = (hex: string) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -1089,6 +1091,52 @@ export default function App() {
      setActiveModal('none');
   };
 
+  const handleExportDXF = () => {
+     if (points.length < 3) return;
+     try {
+       const d = new Drawing();
+       d.setUnits('Meters');
+       d.addLayer('boundary', Drawing.ACI.GREEN, 'CONTINUOUS');
+       d.setActiveLayer('boundary');
+
+       const dxfPoints = points.map(p => {
+         const coords = utm.fromLatLon(p.lat, p.lng);
+         return [coords.easting, coords.northing] as [number, number];
+       });
+
+       d.drawPolyline(dxfPoints, true);
+
+       const areaText = `${stats.areaSqMeters.toFixed(2)} m2`;
+       const centroidEasting = dxfPoints.reduce((sum, p) => sum + p[0], 0) / dxfPoints.length;
+       const centroidNorthing = dxfPoints.reduce((sum, p) => sum + p[1], 0) / dxfPoints.length;
+
+       d.addLayer('labels', Drawing.ACI.CYAN, 'CONTINUOUS');
+       d.setActiveLayer('labels');
+       // Approximate text height
+       let minX = Infinity, maxX = -Infinity;
+       dxfPoints.forEach(p => {
+         if (p[0] < minX) minX = p[0];
+         if (p[0] > maxX) maxX = p[0];
+       });
+       const width = maxX - minX;
+       const textHeight = Math.max(1, width * 0.05);
+
+       d.drawText(centroidEasting, centroidNorthing, textHeight, 0, areaText, 'center', 'middle');
+
+       const blob = new Blob([d.toDxfString()], { type: "application/dxf;charset=utf-8;" });
+       const url = URL.createObjectURL(blob);
+       const link = document.createElement("a");
+       link.href = url;
+       link.download = `calcare_survey_${new Date().getTime()}.dxf`;
+       link.click();
+       URL.revokeObjectURL(url);
+       setActiveModal('none');
+     } catch (e) {
+       console.error("Export DXF error:", e);
+       alert("Failed to export DXF. Please ensure coordinates are valid.");
+     }
+  };
+
   const extractCoords = (obj: any): any[] => {
     let coords: any[] = [];
     if (Array.isArray(obj)) {
@@ -1731,12 +1779,15 @@ const CustomZoomControl = () => {
                                 {isExporting ? t(lang, 'generating') : <><Download size={14} /> {t(lang, 'exportPdfBtn')}</>}
                             </button>
 
-                            <div className="grid grid-cols-2 gap-2 mt-4">
+                            <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 mt-4">
                                <button onClick={handleExportGeoJSON} disabled={points.length < 3} className="bg-transparent border border-[var(--color-fg)]/20 text-[var(--color-fg)] py-2 text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex justify-center items-center gap-2 disabled:opacity-30">
                                   <FileJson size={14} /> {t(lang, 'exportGeoJSON')}
                                </button>
                                <button onClick={handleExportCSV} disabled={points.length === 0} className="bg-transparent border border-[var(--color-fg)]/20 text-[var(--color-fg)] py-2 text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex justify-center items-center gap-2 disabled:opacity-30">
                                   <Table size={14} /> {t(lang, 'exportCSV')}
+                               </button>
+                               <button onClick={handleExportDXF} disabled={points.length < 3} className="col-span-2 lg:col-span-1 bg-transparent border border-[var(--color-fg)]/20 text-[var(--color-fg)] py-2 text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex justify-center items-center gap-2 disabled:opacity-30">
+                                  <Layers size={14} /> Export DXF
                                </button>
                             </div>
                         </div>
