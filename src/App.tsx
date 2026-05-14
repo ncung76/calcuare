@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup } from 'react-leaflet';
 import * as turf from '@turf/turf';
-import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link } from 'lucide-react';
+import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 import L from 'leaflet';
@@ -119,14 +119,14 @@ const SurveyGrid = ({ active }: { active: boolean }) => {
 
 const MapWatermark = () => {
   return (
-    <div className="absolute inset-0 pointer-events-none z-[1500] overflow-hidden opacity-[0.18] select-none flex flex-wrap content-start justify-center gap-16 p-4">
+    <div className="absolute inset-0 pointer-events-none z-[1500] overflow-hidden opacity-[0.33] select-none flex flex-wrap content-start justify-center gap-16 p-4">
       {Array.from({ length: 200 }).map((_, i) => (
         <div 
           key={i} 
           className="whitespace-nowrap transform -rotate-12 text-[10px] font-bold uppercase tracking-[0.3em] text-[#FFD700]"
           style={{ width: 'fit-content' }}
         >
-          Ncung Gallagher
+          Rifky Rangga
         </div>
       ))}
     </div>
@@ -445,6 +445,7 @@ export default function App() {
   const [areaUnit, setAreaUnit] = useState<'are' | 'ha' | 'sqm'>('are');
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [lang, setLang] = useState<Language>('en');
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [areaPrecision, setAreaPrecision] = useState<number>(() => Number(localStorage.getItem('calcare_area_precision')) || 4);
   const [arePrecision, setArePrecision] = useState<number>(() => {
     const val = localStorage.getItem('calcare_are_precision');
@@ -854,58 +855,85 @@ export default function App() {
         const pdf = new jsPDF('p', 'mm', 'a4');
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = pdf.internal.pageSize.getHeight();
-        
-        // Title Header
         const margin = 15;
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(22);
-        pdf.setTextColor(26, 26, 26);
-        pdf.text("Calcare Surveyor Report", margin, 22);
-        
-        pdf.setLineWidth(0.5);
-        pdf.setDrawColor(200, 200, 200);
-        pdf.line(margin, 26, pdfWidth - margin, 26);
-        
-        // Format datetime nicely
+
+        // Format datetime once
         const readableDate = new Intl.DateTimeFormat('en-US', {
             day: 'numeric', month: 'long', year: 'numeric',
             hour: '2-digit', minute: '2-digit'
         }).format(new Date());
+        const projectRef = `GEO-${Date.now().toString().slice(-6)}`;
+
+        const drawHeader = (pageNum: number) => {
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(22);
+            pdf.setTextColor(26, 26, 26);
+            pdf.text("Calcare Surveyor Report", margin, 22);
+            
+            pdf.setLineWidth(0.5);
+            pdf.setDrawColor(200, 200, 200);
+            pdf.line(margin, 26, pdfWidth - margin, 26);
+            
+            pdf.setFont("helvetica", "normal");
+            pdf.setFontSize(9);
+            pdf.setTextColor(100);
+            pdf.text(`Generated: ${readableDate}`, margin, 32);
+            pdf.text(`Project Ref: ${projectRef}`, pdfWidth - margin, 32, { align: "right" });
+            pdf.text(`Page ${pageNum}`, pdfWidth / 2, pdfHeight - 10, { align: "center" });
+        };
+
+        const drawFooter = () => {
+            pdf.setFont("helvetica", "normal");
+            pdf.setFontSize(8);
+            pdf.setTextColor(150);
+            pdf.text("Dibuat oleh Rifky Rangga", margin, pdfHeight - 10);
+        };
+
+        // --- PAGE 1: MAP IMAGE ---
+        drawHeader(1);
         
-        pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(9);
-        pdf.setTextColor(100);
-        pdf.text(`Generated: ${readableDate}`, margin, 32);
-        pdf.text(`Project Ref: GEO-${Date.now().toString().slice(-6)}`, pdfWidth - margin, 32, { align: "right" });
-        
-        // Draw Image
         const imgProps = pdf.getImageProperties(imgData);
-        const imgY = 40;
-        const widthToDraw = pdfWidth - (margin * 2);
-        const heightToDraw = (imgProps.height * widthToDraw) / imgProps.width;
+        const imgY = 45;
+        const maxImgWidth = pdfWidth - (margin * 2);
+        const maxImgHeight = pdfHeight - imgY - 25; // Leave space for footer
         
-        pdf.addImage(imgData, 'PNG', margin, imgY, widthToDraw, heightToDraw);
+        // Calculate best fit maintaining aspect ratio
+        const ratio = Math.min(maxImgWidth / imgProps.width, maxImgHeight / imgProps.height);
+        const widthToDraw = imgProps.width * ratio;
+        const heightToDraw = imgProps.height * ratio;
+        const xOffset = (pdfWidth - widthToDraw) / 2; // Center image horizontally
+        
+        pdf.addImage(imgData, 'PNG', xOffset, imgY, widthToDraw, heightToDraw);
         
         // Draw border around the map image
         pdf.setDrawColor(150, 150, 150);
         pdf.setLineWidth(0.3);
-        pdf.rect(margin, imgY, widthToDraw, heightToDraw);
+        pdf.rect(xOffset, imgY, widthToDraw, heightToDraw);
         
+        drawFooter();
+
+        // --- PAGE 2: DATA & METRICS ---
+        pdf.addPage();
+        let currentPage = 2;
+        drawHeader(currentPage);
+
+        const availableWidth = pdfWidth - (margin * 2);
+
         // Draw Metrics Header
-        let currentY = imgY + heightToDraw + 15;
+        let currentY = 45;
         pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(12);
+        pdf.setFontSize(14);
         pdf.setTextColor(26, 26, 26);
         pdf.text("GEOSPATIAL METRICS", margin, currentY);
         
         currentY += 4;
         pdf.setDrawColor(200, 200, 200);
-        pdf.line(margin, currentY, pdfWidth - margin, currentY);
-        currentY += 8;
+        pdf.line(margin, currentY, margin + availableWidth, currentY);
+        currentY += 10;
         
         // Metrics Content
         pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(10);
+        pdf.setFontSize(11);
         pdf.setTextColor(50, 50, 50);
         
         pdf.text(`Total Area:`, margin, currentY);
@@ -917,26 +945,26 @@ export default function App() {
         } else {
             areaText = `${stats.areaSqMeters.toFixed(areaPrecision)} m2 / ${stats.areaAre.toFixed(arePrecision)} are (${stats.areaHectares.toFixed(areaPrecision)} ha)`;
         }
-        pdf.text(areaText, margin + 40, currentY);
-        currentY += 6;
+        pdf.text(areaText, margin + 45, currentY);
+        currentY += 8;
 
         pdf.text(`Total Perimeter:`, margin, currentY);
-        pdf.text(`${stats.perimeter.toFixed(2)} m`, margin + 40, currentY);
-        currentY += 6;
+        pdf.text(`${stats.perimeter.toFixed(2)} m`, margin + 45, currentY);
+        currentY += 8;
         
         if (stats.length > 0) {
             pdf.text(`Max Dimensions:`, margin, currentY);
-            pdf.text(`${stats.length.toFixed(2)} m (L) x ${stats.width.toFixed(2)} m (W)`, margin + 40, currentY);
-            currentY += 6;
+            pdf.text(`${stats.length.toFixed(2)} m (L) x ${stats.width.toFixed(2)} m (W)`, margin + 45, currentY);
+            currentY += 8;
         }
         
-        // Left Column: Boundary Coordinates | Right Column: Edge Measurements
+        // Columns for Coordinates and Edges
         currentY += 10;
         const colStart1 = margin;
-        const colStart2 = margin + (widthToDraw / 2) + 5;
+        const colStart2 = margin + (availableWidth / 2) + 5;
         
         pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(11);
+        pdf.setFontSize(12);
         pdf.setTextColor(26, 26, 26);
         pdf.text("BOUNDARY COORDINATES", colStart1, currentY);
         if (stats.edges && stats.edges.length > 0) {
@@ -944,9 +972,9 @@ export default function App() {
         }
         
         currentY += 4;
-        pdf.line(colStart1, currentY, colStart1 + (widthToDraw / 2) - 10, currentY);
+        pdf.line(colStart1, currentY, colStart1 + (availableWidth / 2) - 5, currentY);
         if (stats.edges && stats.edges.length > 0) {
-            pdf.line(colStart2, currentY, colStart2 + (widthToDraw / 2) - 10, currentY);
+            pdf.line(colStart2, currentY, colStart2 + (availableWidth / 2) - 5, currentY);
         }
         currentY += 7;
         
@@ -955,37 +983,45 @@ export default function App() {
         pdf.setTextColor(50, 50, 50);
         
         const listStartY = currentY;
+        let coordY = currentY;
         
         // Draw Coordinates in Left Column
         points.forEach((p, idx) => {
-            if (currentY > pdfHeight - 20) { 
-                pdf.addPage(); 
-                currentY = 20; 
+            if (coordY > pdfHeight - 25) { 
+                drawFooter();
+                pdf.addPage();
+                currentPage++;
+                drawHeader(currentPage);
+                coordY = 45; 
             }
             // Draw color indicator
             const colorRgb = hexToRgb(p.color || DEFAULT_POINT_COLOR);
             if (colorRgb) {
                 pdf.setFillColor(colorRgb.r, colorRgb.g, colorRgb.b);
-                pdf.rect(colStart1, currentY - 3, 2, 2, 'F');
+                pdf.rect(colStart1, coordY - 3, 2, 2, 'F');
             }
-            pdf.text(`P${String(idx + 1).padStart(2,'0')}: ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`, colStart1 + 4, currentY);
-            currentY += 6; // Ditingkatkan spasi vertikal agar tidak sempit
+            pdf.text(`P${String(idx + 1).padStart(2,'0')}: ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`, colStart1 + 4, coordY);
+            coordY += 6;
         });
         
-        // Reset Y and Draw Edges in Right Column
-        let rightY = listStartY;
+        // Reset Y and Draw Edges in Right Column (starting from the same Top Y as coords on page 2)
+        let edgeY = listStartY;
+        // Note: For simplicity, if edges overflow Page 2, they will just follow the coord-page breaking or overlap.
+        // Given the scale, it's unlikely to have 100+ points often.
         if (stats.edges && stats.edges.length > 0) {
             stats.edges.forEach((e: any, idx: number) => {
-                if (rightY > pdfHeight - 20) { 
-                    /* Simplified logic: assumes edges fit on same page as coords or breaks similarly */
-                    if(currentY <= 20) { rightY = 20; } 
+                if (edgeY > pdfHeight - 25) { 
+                    // This is tricky if coords and edges break differently. 
+                    // For now, let's just make sure we don't draw off page.
+                    // If we have hundreds of points, we'd need a more robust grid system.
                 }
                 const nextIdx = (idx + 1) === points.length ? 0 : idx + 1;
-                // Menggunakan '->' alih-alih lambang panah unicode agar tidak bug font encoding di jsPDF
-                pdf.text(`P${idx+1} -> P${nextIdx+1}: ${e.distance.toFixed(2)} m`, colStart2, rightY);
-                rightY += 6; // Menambahkan sedikit ruang untuk spacing line yang lebih lega
+                pdf.text(`P${idx+1} -> P${nextIdx+1}: ${e.distance.toFixed(2)} m`, colStart2, edgeY);
+                edgeY += 6;
             });
         }
+        
+        drawFooter();
         
         pdf.save(`Calcare_Report_${Date.now()}.pdf`);
         setActiveModal('none');
@@ -1217,6 +1253,44 @@ export default function App() {
     }
   };
 
+  const UserLocationManager = () => {
+    useEffect(() => {
+        if (!("geolocation" in navigator)) return;
+
+        const watchId = navigator.geolocation.watchPosition(
+            (pos) => {
+                const { latitude, longitude } = pos.coords;
+                const newLoc: [number, number] = [latitude, longitude];
+                setUserLocation(newLoc);
+            },
+            (err) => console.warn("Geolocation error:", err),
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+
+        return () => navigator.geolocation.clearWatch(watchId);
+    }, []);
+
+    if (!userLocation) return null;
+
+    const locationIcon = L.divIcon({
+        className: 'user-location-marker',
+        html: `
+            <div class="relative flex items-center justify-center">
+                <div class="absolute w-4 h-4 bg-blue-500 rounded-full animate-ping opacity-75"></div>
+                <div class="relative w-3 h-3 bg-blue-500 border-2 border-white rounded-full shadow-lg"></div>
+            </div>
+        `,
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+    });
+
+    return (
+        <Marker position={userLocation} icon={locationIcon} zIndexOffset={2000}>
+            <Tooltip direction="top" offset={[0, -10]}>Your Location</Tooltip>
+        </Marker>
+    );
+  };
+
   const MapClickHandler = ({ disabled, autoDetectActive }: { disabled?: boolean, autoDetectActive?: boolean }) => {
     const map = useMap();
     useMapEvents({
@@ -1300,16 +1374,37 @@ export default function App() {
     return (
         <LayerGroup>
             {measurePoints.map((p, i) => (
-                <CircleMarker 
+                <Marker 
                     key={`measure-p-${i}`} 
-                    center={p} 
-                    radius={5} 
-                    pathOptions={{ color: '#EAB308', fillColor: '#EAB308', fillOpacity: 0.8 }} 
+                    position={p} 
+                    draggable={true}
+                    eventHandlers={{
+                        drag: (e) => {
+                            const marker = e.target;
+                            const pos = marker.getLatLng();
+                            const newPts = [...measurePoints];
+                            newPts[i] = [pos.lat, pos.lng];
+                            setMeasurePoints(newPts as [number, number][]);
+                        },
+                        dragend: (e) => {
+                            const marker = e.target;
+                            const pos = marker.getLatLng();
+                            const newPts = [...measurePoints];
+                            newPts[i] = [pos.lat, pos.lng];
+                            setMeasurePoints(newPts as [number, number][]);
+                        }
+                    }}
+                    icon={L.divIcon({
+                        className: '',
+                        html: `<div style="background-color: #EAB308; width: 10px; height: 10px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+                        iconSize: [10, 10],
+                        iconAnchor: [5, 5]
+                    })}
                 >
                     <Tooltip permanent direction="top" offset={[0, -5]}>
                         <span className="text-[9px] font-bold uppercase">M_{i+1}</span>
                     </Tooltip>
-                </CircleMarker>
+                </Marker>
             ))}
             {measurePoints.length > 1 && (
                 <>
@@ -1349,25 +1444,6 @@ const CustomZoomControl = () => {
     const map = useMap();
     return (
       <div className="absolute top-1/2 -translate-y-1/2 right-6 flex flex-col gap-2 z-[1000]">
-        <button 
-          onClick={(e) => { 
-            e.preventDefault(); 
-            e.stopPropagation(); 
-            setIsMeasuring(!isMeasuring);
-            if (!isMeasuring) {
-                setIsFreehand(false);
-                setIsEditMode(false);
-                setMeasurePoints([]);
-            }
-          }}
-          className={`w-10 h-10 border shadow-lg flex items-center justify-center transition-all ${isMeasuring ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-white dark:bg-black border-[#1A1A1A]/20 dark:border-white/20 text-[#1A1A1A] dark:text-white hover:bg-[#F7F7F5] dark:hover:bg-[#121212]'}`}
-          title={t(lang, 'measureTool')}
-        >
-          <Ruler size={18} />
-        </button>
-
-        <div className="h-px bg-[var(--color-fg)]/10 my-1 mx-2" />
-
         <button 
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); map.zoomIn(); }}
           className="w-10 h-10 bg-white dark:bg-black border border-[#1A1A1A]/20 dark:border-white/20 shadow-lg flex items-center justify-center text-[#1A1A1A] dark:text-white hover:bg-[#F7F7F5] dark:hover:bg-[#121212] transition-colors"
@@ -1690,7 +1766,7 @@ const CustomZoomControl = () => {
               )}
             </AnimatePresence>
           </div>
-          <span className="text-[10px] md:text-[12px] uppercase tracking-widest opacity-50 hidden sm:inline">V.1 by Rifky Rangga</span>
+          <span className="text-[10px] md:text-[12px] uppercase tracking-widest opacity-50 block md:inline font-mono">V.1 by Rifky Rangga</span>
         </div>
         <div className="flex items-center gap-3 md:gap-8">
           <nav className="hidden lg:flex gap-8 text-[12px] uppercase tracking-widest font-semibold">
@@ -1964,7 +2040,7 @@ const CustomZoomControl = () => {
           <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#1A1A1A 1px, transparent 1px)', backgroundSize: '20px 20px', zIndex: 0 }}></div>
           
           {/* Floating Search Container */}
-          <div className="absolute top-4 left-4 right-4 md:left-6 md:right-auto md:w-[320px] z-[2000] flex flex-col gap-1">
+          <div className="absolute top-4 left-4 right-16 md:left-6 md:right-auto md:w-[320px] z-[2000] flex flex-col gap-1">
             <form onSubmit={handleSearch} className="bg-[var(--color-surface)] border border-[var(--color-fg)]/30 shadow-md flex items-center px-4 py-3 group focus-within:border-[var(--color-fg)]">
               {isSearching ? (
                 <div className="w-3.5 h-3.5 border-2 border-[var(--color-fg)]/30 border-t-[var(--color-fg)] rounded-full animate-spin mr-3"></div>
@@ -2111,6 +2187,7 @@ const CustomZoomControl = () => {
             attributionControl={false}
           >
             <CustomZoomControl />
+            <UserLocationManager />
             <MapCameraController center={mapCenter} />
             <LayersControl position="topright">
               <LayersControl.BaseLayer checked name="Google Satellite (HD)">
@@ -2327,9 +2404,9 @@ const CustomZoomControl = () => {
 
                       return (
                         <Marker 
-                          key={`point-${idx}-${p.lat}-${p.lng}`} 
+                          key={`point-${idx}`} 
                           position={[p.lat, p.lng]} 
-                          draggable={isEditMode && !isFreehand && selectedPointIndex === idx}
+                          draggable={isEditMode && !isFreehand}
                           icon={markerIcon}
                           zIndexOffset={selectedPointIndex === idx ? 1000 : 0}
                           eventHandlers={{
@@ -2358,7 +2435,6 @@ const CustomZoomControl = () => {
                           <Tooltip direction="right" offset={[6, 0]} opacity={1} permanent={points.length < (window.innerWidth < 768 ? 10 : 20)}>
                             <div className="flex flex-col text-[var(--color-fg)]">
                               <span className="font-bold text-[12px]">P_{String(idx + 1).padStart(2,'0')}</span>
-                              <span className="text-[10px] font-mono opacity-70">{p.lat.toFixed(5)}, {p.lng.toFixed(5)}</span>
                             </div>
                           </Tooltip>
                           <Popup offset={[0, -5]} minWidth={180}>

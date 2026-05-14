@@ -104,6 +104,7 @@ export const translations = {
     
     // Alerts
     pdfFailed: "Failed to generate PDF. Please try again.",
+    plotNotFound: "Plot not found at this coordinate.",
     setupSent: "Setup request sent! Please check your Google Spreadsheet.",
     setupFailed: "Setup failed: "
   },
@@ -212,6 +213,7 @@ export const translations = {
     
     // Alerts
     pdfFailed: "Gagal membuat PDF. Silakan coba lagi.",
+    plotNotFound: "Plot tidak ditemukan di koordinat ini.",
     setupSent: "Permintaan setup terkirim! Silakan periksa Google Spreadsheet Anda.",
     setupFailed: "Setup gagal: "
   }
