@@ -403,6 +403,58 @@ const DEFAULT_WMS_LAYERS = [
 ];
 
 export default function App() {
+  const [isAuth, setIsAuth] = useState(false);
+  const [authUsername, setAuthUsername] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const authGasUrl = 'https://script.google.com/macros/s/AKfycbylEEGenZcZelINy1KBn9P6mL5S5gGBtdYKpUsBQOdHx_qxOfa-GtiiGkAbw_lFwnTtsw/exec';
+  const [isLoadingAuth, setIsLoadingAuth] = useState(false);
+
+  useEffect(() => {
+    const savedAuth = localStorage.getItem('calcare_auth_token');
+    if (savedAuth === 'true') {
+      setIsAuth(true);
+    }
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authGasUrl) {
+      setAuthError('Google Apps Script URL is not configured.');
+      return;
+    }
+    
+    setIsLoadingAuth(true);
+    setAuthError('');
+    
+    try {
+      const response = await fetch(`${authGasUrl}?action=login&username=${encodeURIComponent(authUsername)}&password=${encodeURIComponent(authPassword)}`);
+      
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      
+      // We expect the GAS script to return a JSON containing {"success": true/false, "message": "..."}
+      const data = await response.json();
+      
+      if (data.success) {
+        setIsAuth(true);
+        localStorage.setItem('calcare_auth_token', 'true');
+      } else {
+        setAuthError(data.message || 'Invalid credentials');
+      }
+    } catch (error: any) {
+      setAuthError('Failed to fetch from GAS. Please ensure your Google Apps Script is deployed as Web App accessible to "Anyone" and handles GET requests properly. ' + error.message);
+    } finally {
+      setIsLoadingAuth(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setIsAuth(false);
+    localStorage.removeItem('calcare_auth_token');
+  };
+
   const [points, setPoints] = useState<{lat: number, lng: number, color: string}[]>([]);
   const [stats, setStats] = useState(calculateStats([]));
   const [manualInput, setManualInput] = useState({ lat: '', lng: '' });
@@ -605,67 +657,56 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isEditMode, selectedPointIndex, points]);
 
-  useEffect(() => {
-    // Auto-save logic
-    if (points.length === 0) {
-      if (autoSaveStatus !== 'idle') setAutoSaveStatus('idle');
-      // If points are cleared, we should remove the draft even if currentProjectId is null
-      localStorage.removeItem('calcare_points_draft');
-      return;
-    }
-
+  const handleQuickSave = () => {
+    if (points.length === 0) return;
+    
     setAutoSaveStatus('saving');
-    const timer = setTimeout(async () => {
-      // 1. Save to draft workspace
-      localStorage.setItem('calcare_points_draft', JSON.stringify(points));
+    // Save to draft workspace immediately
+    localStorage.setItem('calcare_points_draft', JSON.stringify(points));
+    
+    // Manage Library Entry
+    setSavedProjects(prev => {
+      let updated;
+      if (currentProjectId) {
+        // Update existing
+        updated = prev.map(p => {
+          if (p.id === currentProjectId) {
+            return { 
+              ...p, 
+              points, 
+              date: new Date().toISOString(),
+              areaSqMeters: stats.areaSqMeters,
+              perimeter: stats.perimeter
+            };
+          }
+          return p;
+        });
+      } else {
+        // Create new entry in library
+        const newId = `proj_${Date.now()}`;
+        const newProject = {
+          id: newId,
+          name: `Survey ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+          points,
+          date: new Date().toISOString(),
+          areaSqMeters: stats.areaSqMeters,
+          perimeter: stats.perimeter,
+          unit: areaUnit,
+          shared: false
+        };
+        updated = [newProject, ...prev];
+        setCurrentProjectId(newId);
+        localStorage.setItem('calcare_current_id', newId);
+      }
       
-      // 2. Manage Library Entry
-      let projectToSync: any = null;
-      setSavedProjects(prev => {
-        let updated;
-        if (currentProjectId) {
-          // Update existing
-          updated = prev.map(p => {
-            if (p.id === currentProjectId) {
-              projectToSync = { 
-                ...p, 
-                points, 
-                date: new Date().toISOString(),
-                areaSqMeters: stats.areaSqMeters,
-                perimeter: stats.perimeter
-              };
-              return projectToSync;
-            }
-            return p;
-          });
-        } else {
-          // Auto-create new entry in library
-          const newId = `proj_${Date.now()}`;
-          projectToSync = {
-            id: newId,
-            name: `Survey ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-            points,
-            date: new Date().toISOString(),
-            areaSqMeters: stats.areaSqMeters,
-            perimeter: stats.perimeter,
-            unit: areaUnit,
-            shared: false
-          };
-          updated = [projectToSync, ...prev];
-          setCurrentProjectId(newId);
-          localStorage.setItem('calcare_current_id', newId);
-        }
-        
-        localStorage.setItem('geocalc_projects', JSON.stringify(updated));
-        return updated;
-      });
+      localStorage.setItem('geocalc_projects', JSON.stringify(updated));
+      return updated;
+    });
 
-      setAutoSaveStatus('saved');
-      setTimeout(() => setAutoSaveStatus('idle'), 2000);
-    }, 2000); // 2 second debounce
+    setAutoSaveStatus('saved');
+    setTimeout(() => setAutoSaveStatus('idle'), 2000);
+  };
 
-    return () => clearTimeout(timer);
-  }, [points, currentProjectId, stats.areaSqMeters, stats.perimeter]);
 
   useEffect(() => {
     localStorage.setItem('calcare_area_unit', areaUnit);
@@ -1113,15 +1154,39 @@ export default function App() {
        d.addLayer('labels', Drawing.ACI.CYAN, 'CONTINUOUS');
        d.setActiveLayer('labels');
        // Approximate text height
-       let minX = Infinity, maxX = -Infinity;
+       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
        dxfPoints.forEach(p => {
          if (p[0] < minX) minX = p[0];
          if (p[0] > maxX) maxX = p[0];
+         if (p[1] < minY) minY = p[1];
+         if (p[1] > maxY) maxY = p[1];
        });
        const width = maxX - minX;
+       const height = maxY - minY;
        const textHeight = Math.max(1, width * 0.05);
 
        d.drawText(centroidEasting, centroidNorthing, textHeight, 0, areaText, 'center', 'middle');
+
+       // Draw North Arrow
+       d.addLayer('north_arrow', Drawing.ACI.RED, 'CONTINUOUS');
+       d.setActiveLayer('north_arrow');
+       
+       const arrowSize = Math.max(2, Math.max(width, height) * 0.08);
+       // Place it to the top right of the polygon
+       const arrowBaseX = maxX + arrowSize * 1.5;
+       const arrowBaseY = maxY;
+       
+       // Vertical line
+       d.drawLine(arrowBaseX, arrowBaseY, arrowBaseX, arrowBaseY + arrowSize);
+       // Left wing
+       d.drawLine(arrowBaseX - arrowSize * 0.25, arrowBaseY + arrowSize * 0.6, arrowBaseX, arrowBaseY + arrowSize);
+       // Right wing
+       d.drawLine(arrowBaseX + arrowSize * 0.25, arrowBaseY + arrowSize * 0.6, arrowBaseX, arrowBaseY + arrowSize);
+       // Horizontal bottom line of the arrow body to make it look nicer
+       d.drawLine(arrowBaseX - arrowSize * 0.1, arrowBaseY, arrowBaseX + arrowSize * 0.1, arrowBaseY);
+       
+       const nTextHeight = arrowSize * 0.4;
+       d.drawText(arrowBaseX, arrowBaseY + arrowSize + nTextHeight * 0.8, nTextHeight, 0, 'N', 'center', 'middle');
 
        const blob = new Blob([d.toDxfString()], { type: "application/dxf;charset=utf-8;" });
        const url = URL.createObjectURL(blob);
@@ -1510,6 +1575,57 @@ const CustomZoomControl = () => {
     );
   };
 
+  if (!isAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)] p-4 font-sans text-[var(--color-fg)]">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-xl p-8 max-w-sm w-full">
+          <div className="flex justify-between items-center mb-8">
+            <h1 className="font-serif italic text-3xl font-bold tracking-tight">Calcare</h1>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest opacity-60 mb-2">Username</label>
+                  <input 
+                    type="text" 
+                    value={authUsername}
+                    onChange={(e) => setAuthUsername(e.target.value)}
+                    required
+                    className="w-full bg-[var(--color-surface)] border-b border-[var(--color-fg)]/20 p-2 pl-0 text-md focus:outline-none focus:border-[var(--color-fg)] transition-colors" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest opacity-60 mb-2">Password</label>
+                  <input 
+                    type="password" 
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    required
+                    className="w-full bg-[var(--color-surface)] border-b border-[var(--color-fg)]/20 p-2 pl-0 text-md focus:outline-none focus:border-[var(--color-fg)] transition-colors" 
+                  />
+                </div>
+              </div>
+
+              {authError && (
+                <div className="text-red-500 text-[11px] font-medium bg-red-500/10 p-3 rounded-sm border border-red-500/20">
+                  {authError}
+                </div>
+              )}
+
+              <button 
+                type="submit" 
+                disabled={isLoadingAuth}
+                className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-3 uppercase tracking-widest text-[12px] font-bold hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                {isLoadingAuth ? 'Authenticating...' : 'Sign In'}
+              </button>
+            </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-[100dvh] w-full bg-[var(--color-bg)] font-sans text-[var(--color-fg)] overflow-hidden">
       
@@ -1801,6 +1917,13 @@ const CustomZoomControl = () => {
         <div className="flex flex-col md:flex-row md:items-baseline gap-0 md:gap-2">
           <div className="flex items-baseline gap-2">
             <span className="text-[20px] md:text-[26px] font-serif italic font-bold tracking-tight">Calcare</span>
+            <button 
+              onClick={handleQuickSave} 
+              disabled={points.length === 0}
+              className="ml-2 px-2 py-1 bg-[var(--color-fg)] text-[var(--color-bg)] rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity"
+            >
+              SAVE
+            </button>
             <AnimatePresence>
               {autoSaveStatus !== 'idle' && (
                 <motion.div
@@ -1811,7 +1934,7 @@ const CustomZoomControl = () => {
                 >
                   <div className={`w-1.5 h-1.5 rounded-full ${autoSaveStatus === 'saving' ? 'bg-orange-500 animate-pulse' : 'bg-green-500'}`} />
                   <span className="text-[9px] uppercase tracking-widest font-bold opacity-40">
-                    {autoSaveStatus === 'saving' ? t(lang, 'autoSaving') : t(lang, 'autoSaved')}
+                    {autoSaveStatus === 'saving' ? 'SAVING...' : 'SAVED'}
                   </span>
                 </motion.div>
               )}
@@ -1832,6 +1955,13 @@ const CustomZoomControl = () => {
             <div className="flex items-center gap-3">
               <span className="text-[10px] font-bold uppercase tracking-widest leading-none px-2 py-1 bg-[var(--color-fg)]/10 rounded-sm">LOCAL MODE</span>
             </div>
+            <button 
+              onClick={handleLogout}
+              className="p-1.5 border border-[var(--color-fg)]/20 rounded hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-colors opacity-80 hover:opacity-100 flex items-center justify-center text-red-500 hover:text-red-500 hover:bg-red-500/10 hover:border-red-500/30"
+              title="Logout"
+            >
+              <LogOut size={14} />
+            </button>
           </div>
 
           <div className="flex lg:hidden items-center gap-2">
