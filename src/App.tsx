@@ -1577,8 +1577,19 @@ const CustomZoomControl = () => {
 
   if (!isAuth) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)] p-4 font-sans text-[var(--color-fg)]">
-        <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-xl p-8 max-w-sm w-full">
+      <div className="relative min-h-screen flex items-center justify-center p-4 font-sans text-[var(--color-fg)] overflow-hidden">
+        <video 
+          autoPlay 
+          loop 
+          muted 
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover z-0"
+        >
+          <source src="/bg.mp4" type="video/mp4" />
+        </video>
+        <div className="absolute inset-0 bg-black/40 z-10" />
+
+        <div className="relative z-20 bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-2xl p-8 max-w-sm w-full mx-4">
           <div className="flex justify-between items-center mb-8">
             <h1 className="font-serif italic text-3xl font-bold tracking-tight">Calcare</h1>
           </div>
