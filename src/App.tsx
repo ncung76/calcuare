@@ -1583,13 +1583,14 @@ const CustomZoomControl = () => {
           loop 
           muted 
           playsInline
+          poster="https://images.pexels.com/photos/3225517/pexels-photo-3225517.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1"
           className="absolute inset-0 w-full h-full object-cover z-0"
         >
-          <source src="/bg.mp4" type="video/mp4" />
+          <source src="https://assets.mixkit.co/videos/preview/mixkit-stars-in-the-sky-at-night-11206-large.mp4" type="video/mp4" />
         </video>
-        <div className="absolute inset-0 bg-black/40 z-10" />
+        <div className="absolute inset-0 bg-black/50 z-10" />
 
-        <div className="relative z-20 bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-2xl p-8 max-w-sm w-full mx-4">
+        <div className="relative z-20 bg-[var(--color-surface)]/80 backdrop-blur-md border border-[var(--color-fg)]/20 shadow-2xl p-8 max-w-sm w-full mx-4">
           <div className="flex justify-between items-center mb-8">
             <h1 className="font-serif italic text-3xl font-bold tracking-tight">Calcare</h1>
           </div>
