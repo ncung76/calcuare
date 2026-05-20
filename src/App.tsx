@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup } from 'react-leaflet';
+import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup, GeoJSON } from 'react-leaflet';
 import * as turf from '@turf/turf';
-import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation } from 'lucide-react';
-import { toPng } from 'html-to-image';
+import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import L from 'leaflet';
+import proj4 from 'proj4';
 import { motion, AnimatePresence } from 'motion/react';
 import { translations, Language, t } from './locales';
 import Drawing from 'dxf-writer';
@@ -384,22 +384,170 @@ function calculateStats(points: {lat: number, lng: number}[]) {
   }
 }
 
+function subdividePolygon(points: any[], roadWidth: number, minArea: number, minFront: number) {
+  try {
+    if (points.length < 3) return [];
+    
+    const coords = points.map(p => [p.lng, p.lat]);
+    coords.push([...coords[0]]);
+    const poly = turf.polygon([coords]);
+    const centroid = turf.centroid(poly);
+    
+    let maxDist = 0;
+    let angle = 0;
+    for (let i = 0; i < points.length; i++) {
+        const p1 = points[i];
+        const p2 = points[(i+1) % points.length];
+        const d = turf.distance([p1.lng, p1.lat], [p2.lng, p2.lat]);
+        if (d > maxDist) {
+            maxDist = d;
+            angle = turf.bearing([p1.lng, p1.lat], [p2.lng, p2.lat]);
+        }
+    }
+    
+    // Convert to radians for rotation
+    const rotatedPoly = turf.transformRotate(poly, -angle + 90, { pivot: centroid });
+    const bbox = turf.bbox(rotatedPoly);
+    const minX = bbox[0], minY = bbox[1], maxX = bbox[2], maxY = bbox[3];
+    
+    const ptCenter = centroid.geometry.coordinates;
+    const lenX = turf.distance([minX, ptCenter[1]], [maxX, ptCenter[1]], { units: 'meters' });
+    const lenY = turf.distance([ptCenter[0], minY], [ptCenter[0], maxY], { units: 'meters' });
+    
+    const degXToMeter = lenX / Math.abs(maxX - minX);
+    const degYToMeter = lenY / Math.abs(maxY - minY);
+    
+    const roadWidthDeg = roadWidth / (degYToMeter || 1);
+    const centerY = (minY + maxY) / 2;
+    
+    // Find side slants
+    let leftThetas: number[] = [];
+    let rightThetas: number[] = [];
+    const rotCoords = rotatedPoly.geometry.coordinates[0];
+    for(let i = 0; i < rotCoords.length - 1; i++) {
+        const p1 = rotCoords[i];
+        const p2 = rotCoords[i+1];
+        const dx = p2[0] - p1[0];
+        const dy = p2[1] - p1[1];
+        if (Math.abs(dy) > Math.abs(dx) * 0.1) {
+            let theta = Math.atan2(dx, dy); 
+            if (theta > Math.PI/2) theta -= Math.PI;
+            else if (theta < -Math.PI/2) theta += Math.PI;
+            
+            const midX = (p1[0] + p2[0]) / 2;
+            if (midX < (minX + maxX)/2) leftThetas.push(theta);
+            else rightThetas.push(theta);
+        }
+    }
+    
+    const avgLeftTheta = leftThetas.length > 0 ? leftThetas.reduce((a,b)=>a+b,0)/leftThetas.length : 0;
+    const avgRightTheta = rightThetas.length > 0 ? rightThetas.reduce((a,b)=>a+b,0)/rightThetas.length : 0;
+    
+    const getTheta = (x: number) => {
+        const t = (x - minX) / (maxX - minX || 1);
+        return avgLeftTheta * (1 - t) + avgRightTheta * t;
+    };
+    
+    const roadBox = turf.bboxPolygon([minX, centerY - roadWidthDeg / 2, maxX, centerY + roadWidthDeg / 2]);
+    let roadFeature: any = null;
+    try {
+       roadFeature = turf.intersect(turf.featureCollection([rotatedPoly, roadBox]));
+    } catch(e) {
+       console.warn("Intersection failed on road", e);
+    }
+    
+    const newKavlings: any[] = [];
+    
+    if (roadFeature) {
+        const realRoad = turf.transformRotate(roadFeature, angle - 90, { pivot: centroid });
+        newKavlings.push({
+            id: 'road-1',
+            type: 'road',
+            polygon: realRoad,
+            area: turf.area(realRoad)
+        });
+    }
+
+    const doSlice = (startY: number, endY: number, prefix: string) => {
+        const blockHeightMeters = Math.abs(endY - startY) * degYToMeter;
+        if (blockHeightMeters <= 2) return; 
+        
+        let startX = minX;
+        let count = 0;
+        
+        const spanY = (maxY - minY) * 1.5; 
+        const botY = centerY - spanY;
+        const topY = centerY + spanY;
+        
+        while (startX < maxX) {
+            let lotWidthMeters = minArea / blockHeightMeters;
+            if (lotWidthMeters < minFront) lotWidthMeters = minFront;
+            const lotWidthDeg = lotWidthMeters / (degXToMeter || 1);
+            
+            const endX = Math.min(startX + lotWidthDeg, maxX);
+            
+            const thStart = getTheta(startX);
+            const thEnd = getTheta(endX);
+            
+            const lotPoly = turf.polygon([[
+                [startX - (centerY - botY) * Math.tan(thStart), botY],
+                [startX + (topY - centerY) * Math.tan(thStart), topY],
+                [endX + (topY - centerY) * Math.tan(thEnd), topY],
+                [endX - (centerY - botY) * Math.tan(thEnd), botY],
+                [startX - (centerY - botY) * Math.tan(thStart), botY]
+            ]]);
+            
+            try {
+                // Ensure the lot poly only covers the top or bottom block
+                const targetBbox = turf.bboxPolygon([minX - spanY, Math.min(startY, endY), maxX + spanY, Math.max(startY, endY)]);
+                let lotInSide: any = null;
+                lotInSide = turf.intersect(turf.featureCollection([lotPoly, targetBbox]));
+                if (!lotInSide) { startX = endX; count++; continue; }
+                
+                const intersectFeat = turf.intersect(turf.featureCollection([rotatedPoly, lotInSide]));
+                
+                if (intersectFeat) {
+                    const realLot = turf.transformRotate(intersectFeat, angle - 90, { pivot: centroid });
+                    const lotArea = turf.area(realLot);
+                    
+                    if (lotArea > 5) { // Skip microscopic slivers
+                        const lotCenter = turf.centroid(realLot).geometry.coordinates; // [lng, lat]
+                        // Try to find the coordinate closest to the road for front width placement?
+                        // For now we use the centroid, and calculate rough depth 
+                        const lotDepthMeters = lotArea / lotWidthMeters;
+                        
+                        newKavlings.push({
+                            id: `${prefix}-${count}`,
+                            type: lotArea >= minArea * 0.8 ? 'lot' : 'remnant',
+                            polygon: realLot,
+                            area: lotArea,
+                            center: lotCenter, // [lng, lat]
+                            widthStr: Math.round(lotWidthMeters),
+                            depthStr: Math.round(lotDepthMeters)
+                        });
+                    }
+                }
+            } catch(e) {}
+            
+            startX = endX;
+            count++;
+        }
+    };
+    
+    doSlice(minY, centerY - roadWidthDeg/2, "bot");
+    doSlice(centerY + roadWidthDeg/2, maxY, "top");
+    
+    return newKavlings;
+
+  } catch(err) {
+    console.error("Error generating kavlings:", err);
+    return [];
+  }
+}
+
 // === KOMPONEN UTAMA ===
 const DEFAULT_WMS_LAYERS = [
-  { name: 'Heatmap Desa (v1)', layers: 'dorado:plot_heatmap_ml_desa_v1' },
-  { name: 'Zona Usage', layers: 'dorado:zona_usage' },
-  { name: 'Batas Kecamatan', layers: 'dorado:adm_reg_kecamatan' },
-  { name: 'Heatmap Kecamatan (v4)', layers: 'dorado:plot_heatmap_ml_kecamatan_v4' },
-  { name: 'Batas Provinsi', layers: 'dorado:adm_reg_province' },
-  { name: 'Heatmap Desa', layers: 'dorado:plot_heatmap_ml_desa' },
-  { name: 'Heatmap Desa (v4)', layers: 'dorado:plot_heatmap_ml_desa_v4' },
-  { name: 'Heatmap ML (v4)', layers: 'dorado:plot_heatmap_ml_v4' },
-  { name: 'Heatmap Kabupaten (v4)', layers: 'dorado:plot_heatmap_ml_kabupaten_v4' },
-  { name: 'Batas Kabupaten', layers: 'dorado:adm_reg_kabupaten' },
-  { name: 'RDTR', layers: 'dorado:rdtr' },
-  { name: 'Heatmap Provinsi (v4)', layers: 'dorado:plot_heatmap_ml_province_v4' },
-  { name: 'Dinamika Zona Nilai', layers: 'dorado:dynamica_zona_nilai' },
-  { name: 'Batas Desa', layers: 'dorado:adm_reg_desa' }
+  { name: 'Geo Server - Plot_only', layers: 'dorado:plot_only' },
 ];
 
 export default function App() {
@@ -460,7 +608,20 @@ export default function App() {
   const [manualInput, setManualInput] = useState({ lat: '', lng: '' });
 
   const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<any>(null);
   const [isExporting, setIsExporting] = useState(false);
+  
+  // Export Settings State
+  const [exportClientName, setExportClientName] = useState("");
+  const [exportNIB, setExportNIB] = useState("");
+  const [exportSurveyor, setExportSurveyor] = useState("");
+  const [exportNotes, setExportNotes] = useState("");
+  const [pricePerUnit, setPricePerUnit] = useState<number>(0);
+
+  // Kavling State
+  const [kavlingSettings, setKavlingSettings] = useState({ minArea: 100, minFront: 5, roadWidth: 5 });
+  const [kavlings, setKavlings] = useState<any[]>([]);
+  const [showKavlings, setShowKavlings] = useState(true);
 
   // Search State
   const [mapCenter, setMapCenter] = useState<[number, number] | null>([-8.6705, 115.2126]);
@@ -559,47 +720,9 @@ export default function App() {
     localStorage.setItem('calcare_area_unit', areaUnit);
   }, [areaUnit]);
 
-  // Fetch GeoServer Layers dynamically
+  // Hardcoded GeoServer Layers
   useEffect(() => {
-    const fetchWmsLayers = async () => {
-      try {
-        const response = await fetch('https://geo2.perare.io/geoserver/dorado/wms?service=WMS&version=1.3.0&request=GetCapabilities');
-        if (!response.ok) throw new Error('Network response was not ok');
-        const text = await response.text();
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(text, 'text/xml');
-        
-        const layerNodes = xmlDoc.querySelectorAll('Layer');
-        const layers: {name: string, layers: string}[] = [];
-        
-        layerNodes.forEach(node => {
-          const nameNode = node.querySelector(':scope > Name');
-          const titleNode = node.querySelector(':scope > Title');
-          const childLayers = node.querySelectorAll(':scope > Layer');
-          
-          if (nameNode && nameNode.textContent && childLayers.length === 0) {
-            let name = nameNode.textContent;
-            let title = titleNode ? titleNode.textContent : name;
-            // Often titles are better
-            if (title && title.trim()) {
-              layers.push({ name: title.trim(), layers: name.trim() });
-            } else {
-              layers.push({ name: name.trim(), layers: name.trim() });
-            }
-          }
-        });
-        
-        if (layers.length > 0) {
-          setWmsLayersList(layers);
-        } else {
-          setWmsLayersList(DEFAULT_WMS_LAYERS);
-        }
-      } catch (err) {
-        console.error("Failed to fetch WMS layers:", err);
-        setWmsLayersList(DEFAULT_WMS_LAYERS);
-      }
-    };
-    fetchWmsLayers();
+    setWmsLayersList(DEFAULT_WMS_LAYERS);
   }, []);
 
   useEffect(() => {
@@ -780,6 +903,7 @@ export default function App() {
   const handleClear = () => {
     setPoints([]);
     setMeasurePoints([]);
+    setKavlings([]);
     setCurrentProjectId(null);
     localStorage.removeItem('calcare_points_draft');
     localStorage.removeItem('calcare_current_id');
@@ -882,18 +1006,70 @@ export default function App() {
   }, [handleSearch]);
 
   // Nav Handlers
+  const handleGenerateKavling = () => {
+      const k = subdividePolygon(points, kavlingSettings.roadWidth, kavlingSettings.minArea, kavlingSettings.minFront);
+      setKavlings(k);
+      setShowKavlings(true);
+      setActiveModal('none');
+  };
+
   const handleExport = async () => {
-    if (!mapRef.current) return;
+    if (!mapInstanceRef.current) {
+        alert("Map instance not ready");
+        return;
+    }
     setIsExporting(true);
     
+    // Give time for UI controls to hide and map tiles to be fully ready
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     try {
-        // Capture Map Div using html-to-image to support modern CSS like oklab
-        const imgData = await toPng(mapRef.current, { 
-            cacheBust: true,
-            backgroundColor: '#EBEBE8',
-            pixelRatio: 2 // High res export
-        });
+        let locName = "Custom Location";
+        try {
+            const locLat = points.length > 0 ? points[0].lat : (selectedSearchResult ? selectedSearchResult.lat : (mapCenter ? mapCenter[0] : null));
+            const locLng = points.length > 0 ? points[0].lng : (selectedSearchResult ? selectedSearchResult.lon : (mapCenter ? mapCenter[1] : null));
+            
+            if (locLat && locLng) {
+                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${locLat}&lon=${locLng}&zoom=14&addressdetails=1&accept-language=id`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.address) {
+                        const village = data.address.village || data.address.suburb || data.address.town || "";
+                        const district = data.address.city_district || data.address.county || data.address.municipality || data.address.city || "";
+                        
+                        let formattedName = "";
+                        if (village && district && village !== district) {
+                            formattedName = `${village}, ${district}`;
+                        } else if (village) {
+                            formattedName = village;
+                        } else if (district) {
+                            formattedName = district;
+                        }
+                        
+                        if (formattedName) {
+                            locName = formattedName;
+                        }
+                    } else if (data && data.display_name) {
+                        const parts = data.display_name.split(',');
+                        locName = parts.slice(0, 2).map((p: string) => p.trim()).join(', ');
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("Reverse geocoding failed", e);
+        }
         
+        if (locName === "Custom Location") {
+            if (selectedSearchResult && selectedSearchResult.display_name) {
+                const parts = selectedSearchResult.display_name.split(',');
+                locName = parts.slice(0, 2).map((p: string) => p.trim()).join(', ');
+            } else if (searchQuery) {
+                locName = searchQuery;
+            } else if (points.length > 0) {
+                locName = "Area based on points";
+            }
+        }
+
         // Generate PDF
         const pdf = new jsPDF('p', 'mm', 'a4');
         const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -901,11 +1077,11 @@ export default function App() {
         const margin = 15;
 
         // Format datetime once
-        const readableDate = new Intl.DateTimeFormat('en-US', {
+        const readableDate = new Intl.DateTimeFormat(lang === 'id' ? 'id-ID' : 'en-US', {
             day: 'numeric', month: 'long', year: 'numeric',
             hour: '2-digit', minute: '2-digit'
         }).format(new Date());
-        const projectRef = `GEO-${Date.now().toString().slice(-6)}`;
+        const projectRef = exportNIB ? `NIB-${exportNIB}` : `GEO-${Date.now().toString().slice(-6)}`;
 
         const drawHeader = (pageNum: number) => {
             pdf.setFont("helvetica", "bold");
@@ -929,29 +1105,179 @@ export default function App() {
             pdf.setFont("helvetica", "normal");
             pdf.setFontSize(8);
             pdf.setTextColor(150);
-            pdf.text("Dibuat oleh Rifky Rangga", margin, pdfHeight - 10);
+            pdf.text(`Prepared by ${exportSurveyor || "Rifky Rangga"}`, margin, pdfHeight - 10);
         };
 
-        // --- PAGE 1: MAP IMAGE ---
+        // --- PAGE 1: GEOMETRY SKETCH ---
         drawHeader(1);
         
-        const imgProps = pdf.getImageProperties(imgData);
-        const imgY = 45;
-        const maxImgWidth = pdfWidth - (margin * 2);
-        const maxImgHeight = pdfHeight - imgY - 25; // Leave space for footer
+        // PROJECT SUMMARY (NEW)
+        let summaryY = 42;
         
-        // Calculate best fit maintaining aspect ratio
-        const ratio = Math.min(maxImgWidth / imgProps.width, maxImgHeight / imgProps.height);
-        const widthToDraw = imgProps.width * ratio;
-        const heightToDraw = imgProps.height * ratio;
-        const xOffset = (pdfWidth - widthToDraw) / 2; // Center image horizontally
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(11);
+        pdf.setTextColor(26, 26, 26);
+        pdf.text("Project Summary", margin, summaryY);
         
-        pdf.addImage(imgData, 'PNG', xOffset, imgY, widthToDraw, heightToDraw);
+        summaryY += 6;
+        pdf.setFontSize(9);
         
-        // Draw border around the map image
-        pdf.setDrawColor(150, 150, 150);
+        const drawGridRow = (label: string, val: string, yPos: number) => {
+            pdf.setFont("helvetica", "bold");
+            pdf.setTextColor(100, 100, 100);
+            pdf.text(label, margin, yPos);
+            pdf.setFont("helvetica", "normal");
+            pdf.setTextColor(30, 30, 30);
+            
+            const splitVal = pdf.splitTextToSize(val, pdfWidth - margin - 50);
+            pdf.text(splitVal, margin + 40, yPos);
+            return splitVal.length * 4.5;
+        };
+        
+        summaryY += drawGridRow("Client / Owner:", exportClientName || "-", summaryY);
+        if (exportNIB) summaryY += drawGridRow("NIB / Cert:", exportNIB, summaryY);
+        summaryY += drawGridRow("Location:", locName, summaryY);
+        if (exportNotes) summaryY += drawGridRow("Field Notes:", exportNotes, summaryY);
+        
+        summaryY += 4;
+        
+        const sketchY = summaryY + 8;
+        const boxWidth = pdfWidth - (margin * 2);
+        const boxHeight = pdfHeight - sketchY - 25; 
+        
+        // Draw border around the sketch area
+        pdf.setDrawColor(200, 200, 200);
         pdf.setLineWidth(0.3);
-        pdf.rect(xOffset, imgY, widthToDraw, heightToDraw);
+        pdf.rect(margin, sketchY, boxWidth, boxHeight);
+        
+        pdf.setFontSize(10);
+        pdf.setTextColor(150);
+        pdf.text("SKETSA AREA (TIDAK BERSKALA TEPAT)", margin + 5, sketchY + 8);
+        
+        if (points.length > 1) {
+            // Calculate scale and translation
+            const lats = points.map(p => p.lat);
+            const lngs = points.map(p => p.lng);
+            const minLat = Math.min(...lats);
+            const maxLat = Math.max(...lats);
+            const minLng = Math.min(...lngs);
+            const maxLng = Math.max(...lngs);
+            
+            const latDiff = maxLat - minLat || 0.00001;
+            const lngDiff = maxLng - minLng || 0.00001;
+            
+            // padding inside the box
+            const pad = 20;
+            const drawBoxW = boxWidth - 2*pad;
+            const drawBoxH = boxHeight - 2*pad;
+            
+            // Turf distance for aspect ratio preservation (meters per lat/lng degree roughly)
+            const meterPerLat = 111320;
+            const meterPerLng = 40075000 * Math.cos((minLat + maxLat) / 2 * Math.PI / 180) / 360;
+            
+            const realWidthMeters = lngDiff * meterPerLng;
+            const realHeightMeters = latDiff * meterPerLat;
+            
+            const scaleX = drawBoxW / realWidthMeters;
+            const scaleY = drawBoxH / realHeightMeters;
+            const scale = Math.min(scaleX, scaleY); // uniform scale
+            
+            const scaledW = realWidthMeters * scale;
+            const scaledH = realHeightMeters * scale;
+            
+            // center offsets
+            const cx = margin + pad + (drawBoxW - scaledW) / 2;
+            const cy = sketchY + pad + (drawBoxH - scaledH) / 2;
+            
+            const getX = (lng: number) => cx + ((lng - minLng) * meterPerLng * scale);
+            const getY = (lat: number) => cy + scaledH - ((lat - minLat) * meterPerLat * scale); // inverse Y for canvas
+            
+            // Draw Edges (polygon or path)
+            pdf.setDrawColor(0, 102, 204);
+            pdf.setLineWidth(0.6);
+            for (let i = 0; i < points.length; i++) {
+                const p1 = points[i];
+                // if closing polygon
+                if (i === points.length - 1 && points.length > 2) {
+                    const p2 = points[0];
+                    pdf.line(getX(p1.lng), getY(p1.lat), getX(p2.lng), getY(p2.lat));
+                } else if (i < points.length - 1) {
+                    const p2 = points[i+1];
+                    pdf.line(getX(p1.lng), getY(p1.lat), getX(p2.lng), getY(p2.lat));
+                }
+            }
+            
+            // Draw Kavlings in Sketch
+            if (showKavlings && kavlings && kavlings.length > 0) {
+                pdf.setLineWidth(0.3);
+                kavlings.forEach(k => {
+                    const isRoad = k.type === 'road';
+                    const isRemnant = k.type === 'remnant';
+                    pdf.setDrawColor(150, 150, 150);
+                    
+                    const geoms = k.polygon.geometry.type === 'MultiPolygon' ? k.polygon.geometry.coordinates : [k.polygon.geometry.coordinates];
+                    geoms.forEach((polyCoords: any[]) => {
+                        const exterior = polyCoords[0];
+                        // draw polygon lines
+                        for (let i = 0; i < exterior.length - 1; i++) {
+                            const p1 = exterior[i];
+                            const p2 = exterior[i+1];
+                            pdf.line(getX(p1[0]), getY(p1[1]), getX(p2[0]), getY(p2[1]));
+                        }
+                    });
+                    
+                    if (!isRoad && k.center) {
+                        pdf.setFontSize(6);
+                        pdf.setTextColor(150, 150, 150);
+                        const txtArea = `${Math.round(k.area)} m2`;
+                        const txtDim = `${k.widthStr}m x ${k.depthStr}m`;
+                        pdf.text(txtArea, getX(k.center[0]), getY(k.center[1]) - 1, { align: "center" });
+                        pdf.text(txtDim, getX(k.center[0]), getY(k.center[1]) + 2, { align: "center" });
+                    }
+                });
+            }
+            
+            // Draw Edge Distances
+            if (stats.edges && stats.edges.length > 0) {
+                pdf.setFontSize(8);
+                pdf.setTextColor(80, 80, 80);
+                
+                for (let i = 0; i < stats.edges.length; i++) {
+                    const edge = stats.edges[i];
+                    // we need to place text at midpoint
+                    const ex = getX(edge.midpoint.lng);
+                    const ey = getY(edge.midpoint.lat);
+                    
+                    // Simple white background for text (simulated with standard text for now)
+                    // We'll just draw the text offset slightly
+                    const distText = `${edge.distance.toFixed(1)}m`;
+                    const tW = pdf.getTextWidth(distText);
+                    pdf.setFillColor(255, 255, 255);
+                    pdf.rect(ex - tW/2 - 1, ey - 3.5, tW + 2, 5, 'F');
+                    pdf.text(distText, ex, ey, { align: "center" });
+                }
+            }
+            
+            // Draw Points
+            pdf.setFontSize(9);
+            pdf.setFont("helvetica", "bold");
+            const usedPos: {x:number, y:number}[] = [];
+            
+            for (let i = 0; i < points.length; i++) {
+                const p = points[i];
+                const x = getX(p.lng);
+                const y = getY(p.lat);
+                
+                pdf.setFillColor(255, 100, 100);
+                pdf.setDrawColor(200, 0, 0);
+                pdf.circle(x, y, 1.5, 'FD');
+                
+                // collision-avoidant label
+                let ly = y - 3;
+                pdf.setTextColor(200, 0, 0);
+                pdf.text(`P${i+1}`, x, ly, { align: "center" });
+            }
+        }
         
         drawFooter();
 
@@ -962,8 +1288,54 @@ export default function App() {
 
         const availableWidth = pdfWidth - (margin * 2);
 
-        // Draw Metrics Header
+        // Draw Location Details Header
         let currentY = 45;
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(14);
+        pdf.setTextColor(26, 26, 26);
+        pdf.text("LOCATION DETAILS", margin, currentY);
+        
+        currentY += 4;
+        pdf.setDrawColor(200, 200, 200);
+        pdf.line(margin, currentY, margin + availableWidth, currentY);
+        currentY += 10;
+        
+        // Location Content
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(11);
+        pdf.setTextColor(50, 50, 50);
+        pdf.text(`Location Name:`, margin, currentY);
+        pdf.setFont("helvetica", "normal");
+        
+        const splitName = pdf.splitTextToSize(locName, availableWidth - 45);
+        pdf.text(splitName, margin + 45, currentY);
+        currentY += (splitName.length * 6);
+        currentY += 2;
+        
+        pdf.setFont("helvetica", "bold");
+        pdf.text(`Google Maps:`, margin, currentY);
+        pdf.setFont("helvetica", "normal");
+        
+        let mapLink = "";
+        if (points.length > 0) {
+            mapLink = `https://www.google.com/maps?q=${points[0].lat},${points[0].lng}`;
+        } else if (selectedSearchResult) {
+            mapLink = `https://www.google.com/maps?q=${selectedSearchResult.lat},${selectedSearchResult.lon}`;
+        } else if (mapCenter) {
+            mapLink = `https://www.google.com/maps?q=${mapCenter[0]},${mapCenter[1]}`;
+        }
+        
+        if (mapLink) {
+            pdf.setTextColor(0, 102, 204);
+            pdf.textWithLink("View on Google Maps", margin + 45, currentY, { url: mapLink });
+            pdf.setTextColor(50, 50, 50); // reset color
+        } else {
+            pdf.text("-", margin + 45, currentY);
+        }
+        
+        currentY += 15;
+
+        // Draw Metrics Header
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(14);
         pdf.setTextColor(26, 26, 26);
@@ -998,6 +1370,16 @@ export default function App() {
         if (stats.length > 0) {
             pdf.text(`Max Dimensions:`, margin, currentY);
             pdf.text(`${stats.length.toFixed(2)} m (L) x ${stats.width.toFixed(2)} m (W)`, margin + 45, currentY);
+            currentY += 8;
+        }
+        
+        if (pricePerUnit && pricePerUnit > 0) {
+            pdf.text(`Estimated Value:`, margin, currentY);
+            const refArea = areaUnit === 'are' ? stats.areaAre : (areaUnit === 'ha' ? stats.areaHectares : stats.areaSqMeters);
+            const totalValue = refArea * pricePerUnit;
+            const formattedValue = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(totalValue);
+            const formattedPrice = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(pricePerUnit);
+            pdf.text(`${formattedValue} (at ${formattedPrice} per ${areaUnit === 'are' ? 'are' : areaUnit === 'ha' ? 'ha' : 'm²'})`, margin + 45, currentY);
             currentY += 8;
         }
         
@@ -1044,7 +1426,22 @@ export default function App() {
                 pdf.rect(colStart1, coordY - 3, 2, 2, 'F');
             }
             pdf.text(`P${String(idx + 1).padStart(2,'0')}: ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`, colStart1 + 4, coordY);
-            coordY += 6;
+            coordY += 4;
+            
+            try {
+                const utmCoords = utm.fromLatLon(p.lat, p.lng);
+                pdf.setFontSize(7);
+                pdf.setTextColor(120, 120, 120);
+                // Print UTM Zone + Easting/Northing
+                pdf.text(`UTM ${utmCoords.zoneNum}${utmCoords.zoneLetter}: ${utmCoords.easting.toFixed(2)}E, ${utmCoords.northing.toFixed(2)}N`, colStart1 + 4, coordY);
+            } catch (e) {
+                // Ignore if conversion fails
+            }
+            
+            // Reset for next point
+            pdf.setFontSize(9);
+            pdf.setTextColor(50, 50, 50);
+            coordY += 7;
         });
         
         // Reset Y and Draw Edges in Right Column (starting from the same Top Y as coords on page 2)
@@ -1070,7 +1467,7 @@ export default function App() {
         setActiveModal('none');
     } catch (err) {
         console.error("PDF generation failed:", err);
-        alert("Gagal membuat PDF. Coba kembali.");
+        alert(`PDF generation failed:\n${err instanceof Error ? err.message : String(err)}`);
     } finally {
         setIsExporting(false);
     }
@@ -1146,6 +1543,22 @@ export default function App() {
        });
 
        d.drawPolyline(dxfPoints, true);
+
+       if (kavlings && kavlings.length > 0) {
+           d.addLayer('kavlings', Drawing.ACI.CYAN, 'CONTINUOUS');
+           d.setActiveLayer('kavlings');
+           kavlings.forEach((k: any) => {
+               const geoms = k.polygon.geometry.type === 'MultiPolygon' ? k.polygon.geometry.coordinates : [k.polygon.geometry.coordinates];
+               geoms.forEach((polyCoords: any[]) => {
+                    const exterior = polyCoords[0];
+                    const kDxfPts = exterior.map((pt: any[]) => {
+                        const c = utm.fromLatLon(pt[1], pt[0]);
+                        return [c.easting, c.northing] as [number, number];
+                    });
+                    d.drawPolyline(kDxfPts, true);
+               });
+           });
+       }
 
        const areaText = `${stats.areaSqMeters.toFixed(2)} m2`;
        const centroidEasting = dxfPoints.reduce((sum, p) => sum + p[0], 0) / dxfPoints.length;
@@ -1583,10 +1996,9 @@ const CustomZoomControl = () => {
           loop 
           muted 
           playsInline
-          poster="https://images.pexels.com/photos/3225517/pexels-photo-3225517.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1"
           className="absolute inset-0 w-full h-full object-cover z-0"
         >
-          <source src="https://assets.mixkit.co/videos/preview/mixkit-stars-in-the-sky-at-night-11206-large.mp4" type="video/mp4" />
+          <source src="https://v1.pinimg.com/videos/mc/720p/52/e1/ac/52e1accbbaac96e667a23a6de9006789.mp4" type="video/mp4" />
         </video>
         <div className="absolute inset-0 bg-black/50 z-10" />
 
@@ -1644,18 +2056,55 @@ const CustomZoomControl = () => {
       {/* Modals Overlay */}
       {activeModal !== 'none' && (
         <div className="fixed inset-0 bg-[var(--color-bg)]/80 backdrop-blur-sm z-[3000] flex items-center justify-center p-4">
-            <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]">
-                <div className="flex justify-between items-center p-6 border-b border-[var(--color-fg)]/10">
+            <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] md:max-h-[85vh]">
+                <div className="flex justify-between items-center p-6 border-b border-[var(--color-fg)]/10 shrink-0">
                     <h3 className="font-serif italic text-[22px]">
                         {activeModal === 'library' && 'Project Library'}
                         {activeModal === 'settings' && 'UTM Settings'}
                         {activeModal === 'export' && 'Export Data'}
                         {activeModal === 'import' && 'Import Data'}
+                        {activeModal === 'kavling' && 'Auto Kavling'}
+                        {activeModal === 'menu' && 'Menu'}
                     </h3>
                     <button onClick={() => setActiveModal('none')} className="text-[12px] uppercase tracking-widest font-bold opacity-50 hover:opacity-100">Close [X]</button>
                 </div>
                 
-                <div className="p-6 overflow-y-auto custom-scrollbar">
+                <div className="p-6 overflow-y-auto custom-scrollbar flex-1 min-h-0">
+                    {/* Menu Modal (Mobile Only) */}
+                    {activeModal === 'menu' && (
+                        <div className="flex flex-col gap-4 text-[12px] uppercase tracking-widest font-semibold">
+                            <button onClick={() => {setActiveModal('none');}} className="p-3 text-left border-b border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 flex items-center gap-2"><MapPin size={16}/> {t(lang, 'surveyorMode')}</button>
+                            <button onClick={() => {setActiveModal('library');}} className="p-3 text-left border-b border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 flex items-center gap-2"><Layers size={16}/> {t(lang, 'projectLibrary')}</button>
+                            <button onClick={() => {setActiveModal('settings');}} className="p-3 text-left border-b border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 flex items-center gap-2"><Settings size={16}/> {t(lang, 'utmSettings')}</button>
+                            <button onClick={() => {setActiveModal('import');}} className="p-3 text-left border-b border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 flex items-center gap-2"><FileJson size={16}/> Import Data</button>
+                            <button onClick={() => {setActiveModal('export');}} className="p-3 text-left border-b border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 flex items-center gap-2"><Download size={16}/> {t(lang, 'exportData')}</button>
+                            
+                            <div className="pt-4 mt-2 flex flex-col gap-3">
+                                <span className="opacity-50 font-bold ml-3 text-[10px]">PREFERENCES</span>
+                                <div className="flex items-center gap-4 px-3">
+                                    <button onClick={() => setLang(lang === 'en' ? 'id' : 'en')} className="flex items-center gap-2 p-2 border border-[var(--color-fg)]/20 rounded w-full justify-center">
+                                        Language: {lang.toUpperCase()}
+                                    </button>
+                                    <button onClick={() => setIsDarkMode(!isDarkMode)} className="flex items-center gap-2 p-2 border border-[var(--color-fg)]/20 rounded w-full justify-center">
+                                        {isDarkMode ? <Sun size={14}/> : <Moon size={14}/>} {isDarkMode ? 'LIGHT' : 'DARK'}
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div className="pt-4 mt-2 flex flex-col gap-3">
+                                <span className="opacity-50 font-bold ml-3 text-[10px]">ACCOUNT</span>
+                                <div className="px-3">
+                                   <div className="mb-2">
+                                       <span className="text-[10px] font-bold uppercase tracking-widest leading-none px-2 py-1 bg-[var(--color-fg)]/10 rounded-sm">LOCAL MODE</span>
+                                   </div>
+                                   <button onClick={handleLogout} className="flex items-center gap-2 w-full p-3 justify-center text-red-500 border border-red-500/30 rounded hover:bg-red-500/10">
+                                       <LogOut size={14}/> Log Out
+                                   </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Library Modal */}
                     {activeModal === 'library' && (
                         <div className="space-y-8">
@@ -1888,6 +2337,58 @@ const CustomZoomControl = () => {
                         </div>
                     )}
 
+                    {activeModal === 'kavling' && (
+                        <div className="space-y-4">
+                            <p className="text-[15px] opacity-80 mb-4">Secara otomatis subdivisi area menjadi kavling perumahan dengan akses jalan di tengah atau samping.</p>
+                            
+                            <div className="space-y-4 pt-2 border-t border-[var(--color-fg)]/10">
+                                <div>
+                                    <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Luas Min. Kavling (m²)</label>
+                                    <input 
+                                        type="number" 
+                                        value={kavlingSettings.minArea}
+                                        onChange={(e) => setKavlingSettings(prev => ({...prev, minArea: Number(e.target.value)}))}
+                                        className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Lebar Depan Min. (m)</label>
+                                    <input 
+                                        type="number" 
+                                        value={kavlingSettings.minFront}
+                                        onChange={(e) => setKavlingSettings(prev => ({...prev, minFront: Number(e.target.value)}))}
+                                        className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Lebar Jalan Akses (m)</label>
+                                    <input 
+                                        type="number" 
+                                        value={kavlingSettings.roadWidth}
+                                        onChange={(e) => setKavlingSettings(prev => ({...prev, roadWidth: Number(e.target.value)}))}
+                                        className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
+                                    />
+                                </div>
+                            </div>
+                            
+                            <div className="bg-[var(--color-fg)]/5 p-4 border-l-2 border-[var(--color-fg)]">
+                                <p className="text-[11px] font-mono opacity-80 leading-relaxed">
+                                    Hasil kavling akan tergambar langsung di peta dan juga akan ikut diexport dalam file DXF maupun PDF secara otomatis.
+                                </p>
+                            </div>
+
+                            <button onClick={handleGenerateKavling} className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-4 text-[12px] uppercase tracking-widest font-bold mt-4 shadow-lg hover:opacity-90">
+                                Eksekusi Kavling
+                            </button>
+                            
+                            {kavlings.length > 0 && (
+                                <button onClick={() => { setKavlings([]); setActiveModal('none'); }} className="w-full border-2 border-[var(--color-fg)]/20 text-[var(--color-fg)] py-3 text-[12px] uppercase tracking-widest font-bold mt-2 hover:bg-[var(--color-fg)]/5">
+                                    Hapus Garis Kavling
+                                </button>
+                            )}
+                        </div>
+                    )}
+
                     {/* Export Modal */}
                     {activeModal === 'export' && (
                         <div className="space-y-4">
@@ -1901,6 +2402,44 @@ const CustomZoomControl = () => {
                                     stats.areaSqMeters.toFixed(areaPrecision) + ' m²'
                                 }</div>
                                 <div><strong>{t(lang, 'estimatedPerimeter')}</strong> {stats.perimeter.toFixed(2)} m</div>
+                            </div>
+                            
+                            <div className="space-y-3 mt-4 pt-4 border-t border-[var(--color-fg)]/10">
+                                <h4 className="text-[12px] uppercase tracking-widest font-bold opacity-70">Project Details (Optional)</h4>
+                                <input
+                                    type="text"
+                                    placeholder="Client Name"
+                                    value={exportClientName}
+                                    onChange={(e) => setExportClientName(e.target.value)}
+                                    className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
+                                />
+                                <input
+                                    type="text"
+                                    placeholder="NIB / Certificate Number"
+                                    value={exportNIB}
+                                    onChange={(e) => setExportNIB(e.target.value)}
+                                    className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
+                                />
+                                <input
+                                    type="text"
+                                    placeholder="Surveyor Name"
+                                    value={exportSurveyor}
+                                    onChange={(e) => setExportSurveyor(e.target.value)}
+                                    className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
+                                />
+                                <input
+                                    type="number"
+                                    placeholder={`Price per ${areaUnit === 'are' ? 'Are' : areaUnit === 'ha' ? 'Hectare' : 'm²'} (Rp)`}
+                                    value={pricePerUnit || ''}
+                                    onChange={(e) => setPricePerUnit(Number(e.target.value))}
+                                    className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
+                                />
+                                <textarea
+                                    placeholder="Field Notes"
+                                    value={exportNotes}
+                                    onChange={(e) => setExportNotes(e.target.value)}
+                                    className="w-full h-20 p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)] resize-none"
+                                />
                             </div>
 
                             <button onClick={handleExport} disabled={isExporting} className="w-full bg-[var(--color-fg)] text-white py-3 text-[12px] uppercase tracking-widest font-bold mt-4 disabled:opacity-50 flex justify-center items-center gap-2 transition-all">
@@ -1963,7 +2502,7 @@ const CustomZoomControl = () => {
             <button onClick={() => setActiveModal('export')} className={`cursor-pointer pb-1 ${activeModal === 'export' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'exportData')}</button>
           </nav>
 
-          <div className="flex items-center gap-2 md:gap-4 ml-2 md:ml-0 md:border-l border-[var(--color-fg)]/10 md:pl-4">
+          <div className="hidden lg:flex items-center gap-2 md:gap-4 ml-2 md:ml-0 md:border-l border-[var(--color-fg)]/10 md:pl-4">
             <div className="flex items-center gap-3">
               <span className="text-[10px] font-bold uppercase tracking-widest leading-none px-2 py-1 bg-[var(--color-fg)]/10 rounded-sm">LOCAL MODE</span>
             </div>
@@ -1976,14 +2515,7 @@ const CustomZoomControl = () => {
             </button>
           </div>
 
-          <div className="flex lg:hidden items-center gap-2">
-             <button onClick={() => setActiveModal('library')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'projectLibrary')}><Layers size={16} className="opacity-70"/></button>
-             <button onClick={() => setActiveModal('settings')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'utmSettings')}><Settings size={16} className="opacity-70" /></button>
-             <button onClick={() => setActiveModal('import')} className="p-2 border border-[var(--color-fg)]/10 rounded" title="Import Data"><FileJson size={16} className="opacity-70"/></button>
-             <button onClick={() => setActiveModal('export')} className="p-2 border border-[var(--color-fg)]/10 rounded" title={t(lang, 'exportData')}><Download size={16} className="opacity-70"/></button>
-          </div>
-          
-          <div className="flex items-center gap-2">
+          <div className="hidden lg:flex items-center gap-2">
             <button 
               onClick={() => setLang(lang === 'en' ? 'id' : 'en')} 
               className="px-2 py-1 text-[11px] font-bold border border-[var(--color-fg)]/20 rounded hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-colors opacity-80 hover:opacity-100"
@@ -1998,6 +2530,12 @@ const CustomZoomControl = () => {
             >
               {isDarkMode ? <Sun size={14} /> : <Moon size={14} />}
             </button>
+          </div>
+          
+          <div className="flex lg:hidden items-center">
+             <button onClick={() => setActiveModal('menu')} className="p-2 border border-[var(--color-fg)]/10 rounded" title="Menu">
+                 <Menu size={20} className="opacity-70"/>
+             </button>
           </div>
         </div>
       </header>
@@ -2372,9 +2910,11 @@ const CustomZoomControl = () => {
             `}</style>
 
             <MapContainer 
+              ref={mapInstanceRef}
               center={[-8.6705, 115.2126]} 
             zoom={12} 
             maxZoom={24}
+            preferCanvas={true}
             className={`w-full h-full z-10 ${(!isEditMode || isFreehand || isMeasuring) ? 'cursor-crosshair' : ''} ${isAutoDetect ? 'cursor-help' : ''}`}
             zoomControl={false}
             attributionControl={false}
@@ -2405,6 +2945,7 @@ const CustomZoomControl = () => {
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   maxZoom={19}
+                  crossOrigin="anonymous"
                 />
               </LayersControl.BaseLayer>
 
@@ -2413,6 +2954,7 @@ const CustomZoomControl = () => {
                   attribution='Tiles &copy; Esri &mdash; Source: USGS, Esri, TANA, DeLorme, and NPS'
                   url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}"
                   maxZoom={13}
+                  crossOrigin="anonymous"
                 />
               </LayersControl.BaseLayer>
 
@@ -2421,6 +2963,7 @@ const CustomZoomControl = () => {
                   attribution='&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>, &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors'
                   url="https://tiles.stadiamaps.com/tiles/stamen_toner/{z}/{x}/{y}{r}.png"
                   maxZoom={20}
+                  crossOrigin="anonymous"
                 />
               </LayersControl.BaseLayer>
 
@@ -2435,6 +2978,7 @@ const CustomZoomControl = () => {
                     maxZoom={24}
                     opacity={wmsOpacity}
                     className="custom-wms-layer"
+                    crossOrigin="anonymous"
                   />
                 </LayersControl.Overlay>
               ))}
@@ -2559,6 +3103,29 @@ const CustomZoomControl = () => {
                         }}
                       />
                     )}
+                    
+                    {/* Kavlings rendering */}
+                    {showKavlings && kavlings.map(k => (
+                        <React.Fragment key={k.id}>
+                            <GeoJSON 
+                                data={k.polygon} 
+                                style={{
+                                    color: k.type === 'road' ? '#cbd5e1' : (k.type === 'remnant' ? '#f59e0b' : '#3b82f6'),
+                                    weight: 1,
+                                    fillColor: k.type === 'road' ? '#cbd5e1' : (k.type === 'remnant' ? '#fef3c7' : '#dbeafe'),
+                                    fillOpacity: 0.7
+                                }}
+                            />
+                            {k.center && k.type !== 'road' && (
+                                <Marker position={[k.center[1], k.center[0]]} opacity={0}>
+                                    <Tooltip permanent direction="center" className="bg-transparent border-0 shadow-none text-blue-900 font-bold opacity-80" style={{ fontSize: '10px' }}>
+                                        {Math.round(k.area)} m²<br/>
+                                        <span className="text-[8px] opacity-70 font-mono">{k.widthStr}m x {k.depthStr}m</span>
+                                    </Tooltip>
+                                </Marker>
+                            )}
+                        </React.Fragment>
+                    ))}
 
                     {/* Dimensional Marker Line */}
                     {points.length > 2 && stats.longestLine && showPlotSizes && (
@@ -2776,7 +3343,29 @@ const CustomZoomControl = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-8">
+          <div className="mt-8 border-t border-[var(--color-fg)]/10 pt-4">
+            <label className="text-[12px] uppercase opacity-40 flex items-center mb-2 font-bold justify-between">
+              <span>Estimated Land Value</span>
+              <div className="flex items-center gap-2">
+                 <span className="opacity-60 text-[10px] lowercase">Rp / {areaUnit}</span>
+                 <input 
+                   type="number"
+                   value={pricePerUnit || ''}
+                   onChange={e => setPricePerUnit(Number(e.target.value))}
+                   className="w-24 px-1 py-0.5 text-right bg-transparent border-b border-[var(--color-fg)]/20 focus:outline-none focus:border-[var(--color-fg)] text-[12px] font-mono text-[var(--color-fg)]"
+                   placeholder="0"
+                 />
+              </div>
+            </label>
+            <div className="text-[28px] font-serif tracking-tight text-[var(--color-accent)]">
+              {pricePerUnit > 0 
+                ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(pricePerUnit * (areaUnit === 'are' ? stats.areaAre : areaUnit === 'ha' ? stats.areaHectares : stats.areaSqMeters))
+                : <span className="opacity-30">Rp 0,00</span>
+              }
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-8 mt-6">
             <div className="border-t border-[var(--color-fg)]/10 pt-4 text-[var(--color-fg)]">
               <label className="text-[12px] uppercase opacity-40 flex items-center mb-2 font-bold">
                 {t(lang, 'estLength')} × {t(lang, 'estWidth')} (MBR)
@@ -2797,6 +3386,20 @@ const CustomZoomControl = () => {
               <div className="text-[20px] font-serif">
                 {stats.perimeter > 0 ? stats.perimeter.toLocaleString('id-ID', {maximumFractionDigits: 2}) : "0.00"} <span className="text-[15px] italic opacity-60">m</span>
               </div>
+            </div>
+
+            <div className="border-t border-[var(--color-fg)]/10 pt-4 text-[var(--color-fg)]">
+              <label className="text-[12px] uppercase opacity-40 flex items-center mb-2 font-bold">
+                Auto Kavling (BETA)
+                <MetricTooltip content="Automatically subdivide area with a road" />
+              </label>
+              <button 
+                  onClick={() => setActiveModal('kavling')}
+                  disabled={points.length < 3}
+                  className="w-full mt-1 py-3 bg-[var(--color-fg)]/5 hover:bg-[var(--color-fg)]/10 border border-[var(--color-fg)]/20 text-[12px] uppercase tracking-widest font-bold transition-all text-[var(--color-fg)] disabled:opacity-30 flex items-center justify-center gap-2"
+              >
+                  <MapPin size={14} /> Setup Subdivision
+              </button>
             </div>
           </div>
 
