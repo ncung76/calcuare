@@ -1,6 +1,23 @@
-const gasUrl = 'https://script.google.com/macros/s/AKfycbyH2xWu0sq1mmPW48zK2KWfhdzkrGr2Ok45EsRlVzbJx0Y5Nbvt4zGwJ1S_zfD0rgJlnQ/exec';
-async function test() {
-  const res = await fetch(gasUrl, {method: 'POST', body: JSON.stringify({action: 'setup'})});
-  console.log(await res.text());
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --color-bg: #FFFFFF;
+  --color-fg: #1A1A1A;
+  --color-surface: #F9F9F9;
+  --color-map: #EBEBE8;
 }
-test();
+
+.dark {
+  --color-bg: #121212;
+  --color-fg: #E0E0E0;
+  --color-surface: #1E1E1E;
+  --color-map: #0A0A0A;
+}
+
+.leaflet-tooltip-transparent {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
