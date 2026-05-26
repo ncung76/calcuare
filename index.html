@@ -1,2 +1,14 @@
-const u = 'https://geo2.perare.io/geoserver/dorado/wms?request=GetFeatureInfo&service=WMS&srs=EPSG:4326&version=1.1.1&format=image/png&bbox=115.1,-8.7,115.3,-8.5&height=1000&width=1000&layers=dorado:adm_reg_desa&query_layers=dorado:adm_reg_desa&info_format=application/json&x=500&y=500';
-fetch(u).then(r=>r.text()).then(console.log);
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="https://i.pinimg.com/564x/a9/17/3c/a9173cc856d28364a8bb67efdc749ec4.jpg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Calcare</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

@@ -1,43 +1,23 @@
-{
-  "name": "react-example",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build",
-    "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@google/genai": "^1.29.0",
-    "@tailwindcss/vite": "^4.1.14",
-    "@turf/turf": "^7.3.5",
-    "@vitejs/plugin-react": "^5.0.4",
-    "dotenv": "^17.2.3",
-    "dxf-writer": "^1.18.4",
-    "express": "^4.21.2",
-    "jspdf": "^4.2.1",
-    "leaflet": "^1.9.4",
-    "lucide-react": "^0.546.0",
-    "motion": "^12.23.24",
-    "proj4": "^2.20.8",
-    "react": "^19.0.1",
-    "react-dom": "^19.0.1",
-    "react-leaflet": "^5.0.0",
-    "utm": "^1.1.1",
-    "vite": "^6.2.3"
-  },
-  "devDependencies": {
-    "@capacitor/cli": "^8.3.4",
-    "@types/express": "^4.17.21",
-    "@types/node": "^22.14.0",
-    "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
-    "tailwindcss": "^4.1.14",
-    "tsx": "^4.21.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.3"
-  }
+const fs = require('fs');
+let content = fs.readFileSync('src/App.tsx', 'utf-8');
+
+const replacements = {
+  'text-[10px]': 'text-[11px]',
+  'text-[11px]': 'text-[12px]',
+  'text-xs': 'text-[13px]',
+  'text-sm': 'text-[15px]',
+  'text-base': 'text-[17px]',
+  'text-lg': 'text-[20px]',
+  'text-xl': 'text-[22px]',
+  'text-2xl': 'text-[26px]',
+  'text-3xl': 'text-[33px]',
+  'text-4xl': 'text-[40px]',
+  'text-5xl': 'text-[53px]',
+};
+
+for (const [search, replace] of Object.entries(replacements)) {
+  content = content.split(search).join(replace);
 }
+
+fs.writeFileSync('src/App.tsx', content);
+console.log('Done');

@@ -1,59 +1,20 @@
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    // Helper: Is the user signed in?
-    function isSignedIn() {
-      return request.auth != null;
-    }
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+</div>
 
-    // Helper: Check if the user is verified (Google Login usually is)
-    function isVerified() {
-      return isSignedIn() && (request.auth.token.email_verified == true);
-    }
+# Run and deploy your AI Studio app
 
-    // Helper: Is the document ID valid?
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
+This contains everything you need to run your app locally.
 
-    // Helper: Validate Project structure
-    function isValidProject(data) {
-      return data.keys().hasAll(['id', 'name', 'userId', 'points', 'date']) &&
-             data.id is string && data.id.size() <= 128 &&
-             data.name is string && data.name.size() <= 200 &&
-             data.userId == request.auth.uid &&
-             data.points is list && data.points.size() <= 1000 &&
-             data.date is string &&
-             (!('areaSqMeters' in data) || data.areaSqMeters is number) &&
-             (!('perimeter' in data) || data.perimeter is number) &&
-             (!('unit' in data) || data.unit is string) &&
-             (!('shared' in data) || data.shared is bool);
-    }
+View your app in AI Studio: https://ai.studio/apps/4982ab89-30f1-49b2-992f-15bd09813f98
 
-    // Default deny
-    match /{document=**} {
-      allow read, write: if false;
-    }
+## Run Locally
 
-    // Projects collection
-    match /projects/{projectId} {
-      allow get: if (resource.data.shared == true) || (isVerified() && resource.data.userId == request.auth.uid);
-      allow list: if isVerified() && resource.data.userId == request.auth.uid;
-      allow create: if isVerified() && isValidId(projectId) && isValidProject(request.resource.data);
-      allow update: if isVerified() && isValidId(projectId) && 
-                      resource.data.userId == request.auth.uid && 
-                      isValidProject(request.resource.data) &&
-                      request.resource.data.userId == resource.data.userId; // Immutable owner
-      allow delete: if isVerified() && resource.data.userId == request.auth.uid;
-    }
+**Prerequisites:**  Node.js
 
-    // Users collection
-    match /users/{userId} {
-      allow get: if isVerified() && (userId == request.auth.uid);
-      allow create: if isVerified() && (userId == request.auth.uid) && 
-                      request.resource.data.userId == request.auth.uid;
-      allow update: if isVerified() && (userId == request.auth.uid) && 
-                      request.resource.data.userId == resource.data.userId;
-    }
-  }
-}
+
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`

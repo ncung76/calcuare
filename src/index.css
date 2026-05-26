@@ -1,106 +1,23 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Playfair+Display:ital,wght@0,300;0,400;0,600;1,400&display=swap');
 @import "tailwindcss";
-@import "leaflet/dist/leaflet.css";
 
-html {
-  font-size: 90%; /* Reduces overall font size by 10% globally */
-}
-
-@theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --font-serif: "Playfair Display", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-}
+@custom-variant dark (&:is(.dark *));
 
 :root {
+  --color-bg: #FFFFFF;
   --color-fg: #1A1A1A;
-  --color-bg: #F7F7F5;
-  --color-surface: #ffffff;
+  --color-surface: #F9F9F9;
   --color-map: #EBEBE8;
-  --color-fg-inverse: #ffffff;
-  --color-scrollbar: rgba(26, 26, 26, 0.2);
-  --color-scrollbar-hover: rgba(26, 26, 26, 0.4);
 }
 
 .dark {
-  --color-fg: #E8E8E8;
   --color-bg: #121212;
+  --color-fg: #E0E0E0;
   --color-surface: #1E1E1E;
-  --color-map: #111111;
-  --color-fg-inverse: #121212;
-  --color-scrollbar: rgba(255, 255, 255, 0.2);
-  --color-scrollbar-hover: rgba(255, 255, 255, 0.4);
+  --color-map: #0A0A0A;
 }
 
-/* Leaflet container map requires a height. We will define it in React, but ensure global reset works nicely */
-body {
-  @apply m-0 p-0 font-sans text-[var(--color-fg)] bg-[var(--color-bg)];
-}
-
-/* Scrollbar for Editorial aesthetic */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--color-scrollbar);
-  border-radius: 4px;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: var(--color-scrollbar-hover);
-}
-
-/* Leaflet Overrides for Editorial Aesthetic */
-.leaflet-tooltip {
-  background: transparent !important;
+.leaflet-tooltip-transparent {
+  background-color: transparent !important;
   border: none !important;
   box-shadow: none !important;
-  color: var(--color-fg) !important;
-  font-family: var(--font-mono) !important;
-  font-size: 11px !important;
-  font-weight: 700 !important;
-  text-shadow: 1px 1px 0px var(--color-bg), -1px -1px 0px var(--color-bg), 1px -1px 0px var(--color-bg), -1px 1px 0px var(--color-bg);
 }
-.leaflet-tooltip::before {
-  display: none !important;
-}
-
-/* Marker Hover Effects */
-.custom-div-icon {
-  transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-
-.custom-div-icon:hover {
-  transform: scale(1.5) !important;
-  z-index: 2000 !important;
-}
-
-.marker-inner {
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.custom-div-icon:hover .marker-inner {
-  border-color: #FFD700 !important; /* Gold border on hover */
-  box-shadow: 0 0 8px rgba(255, 215, 0, 0.6);
-}
-
-.custom-div-icon.selected {
-  transform: scale(1.8) !important;
-  z-index: 1000 !important;
-}
-
-.custom-div-icon.selected .marker-inner {
-  border-color: #FFD700 !important;
-  border-width: 3px !important;
-  box-shadow: 0 0 15px rgba(255, 215, 0, 0.9);
-  animation: marker-pulse 1.5s infinite ease-in-out;
-}
-
-@keyframes marker-pulse {
-  0% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.2); opacity: 0.8; }
-  100% { transform: scale(1); opacity: 1; }
-}
-

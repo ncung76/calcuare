@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, startTransition } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup, GeoJSON } from 'react-leaflet';
 import * as turf from '@turf/turf';
 import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X } from 'lucide-react';
@@ -1039,22 +1039,15 @@ export default function App() {
     });
   };
 
-  const dragRaf = useRef<number | null>(null);
-
   const handlePointDrag = (index: number, newLat: number, newLng: number) => {
     // Clamp or ignore invalid values
     const lat = Math.max(-90, Math.min(90, newLat));
     const lng = Math.max(-180, Math.min(180, newLng));
     
-    if (dragRaf.current) cancelAnimationFrame(dragRaf.current);
-    dragRaf.current = requestAnimationFrame(() => {
-      startTransition(() => {
-        setPoints(prev => {
-          const next = [...prev];
-          next[index] = { ...next[index], lat, lng };
-          return next;
-        });
-      });
+    setPoints(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], lat, lng };
+      return next;
     });
   };
 
@@ -3438,7 +3431,7 @@ const CustomZoomControl = () => {
                         <Marker 
                           key={`point-${idx}`} 
                           position={[p.lat, p.lng]} 
-                          draggable={!isFreehand}
+                          draggable={isEditMode && !isFreehand}
                           icon={markerIcon}
                           zIndexOffset={selectedPointIndex === idx ? 1000 : 0}
                           eventHandlers={{
