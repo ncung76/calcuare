@@ -5,6 +5,7 @@ import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, Hel
 import { jsPDF } from 'jspdf';
 import L from 'leaflet';
 import proj4 from 'proj4';
+import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { translations, Language, t } from './locales';
 import Drawing from 'dxf-writer';
@@ -384,7 +385,7 @@ function calculateStats(points: {lat: number, lng: number}[]) {
   }
 }
 
-function subdividePolygon(points: any[], roadWidth: number, minArea: number, minFront: number, entryEdgeIndex: number = -1, exitEdgeIndex: number = -1, layoutType: string = 'single_center') {
+function subdividePolygon(points: any[], roadWidth: number, minArea: number, minFront: number, entryEdgeIndex: number = -1, exitEdgeIndex: number = -1, layoutType: string = 'single_center', enableCulDeSac: boolean = false, cornerChamfer: boolean = false, maxDepth: number = 30, setbackGSB: number = 0, optMode: string = 'maximize', secondEntryEdgeIndex: number = -1) {
   try {
     if (points.length < 3) return [];
     
@@ -526,7 +527,11 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
         
         const numLots = Math.max(1, Math.floor(blockArea / minArea));
         if (numLots === 0) return;
-        const targetArea = blockArea / numLots;
+        let targetArea = blockArea / numLots;
+        
+        if (optMode === 'maximize') {
+            targetArea = minArea;
+        }
         
         let startX = boundMinX - 0.0001; // start slightly before to cover edge
         let count = 0;
@@ -595,6 +600,17 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
                             }
                         }
 
+                        // Calculate Setback (Garis Sempadan)
+                        let setbackPoly = null;
+                        if (setbackGSB > 0) {
+                            try {
+                                const buffered = turf.buffer(realLot, -setbackGSB, { units: 'meters' });
+                                if (buffered && turf.area(buffered) > 0) {
+                                    setbackPoly = buffered;
+                                }
+                            } catch(e) {}
+                        }
+
                         // Use a nicer numbering A1, A2 instead of top-1
                         const finalPrefix = prefix === "top" ? "A" : "B";
                         const lotDepthMeters = blockHeightMeters;
@@ -605,6 +621,7 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
                             label: `${finalPrefix}${count + 1}`,
                             type: lotArea >= minArea * 0.8 ? 'lot' : 'remnant',
                             polygon: realLot,
+                            setbackPolygon: setbackPoly,
                             area: lotArea,
                             center: lotCenter, // [lng, lat]
                             widthStr: Math.round(lotFrontMeters),
@@ -621,9 +638,24 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
     };
     
     if (layoutType === 'double_parallel') {
-        const offset = (maxY - minY) / 6;
-        const topRoadY = centerY + offset;
-        const botRoadY = centerY - offset;
+        let topRoadY = centerY + (maxY - minY) / 6;
+        let botRoadY = centerY - (maxY - minY) / 6;
+
+        if (secondEntryEdgeIndex >= 0 && secondEntryEdgeIndex < points.length) {
+            const p2In = points[secondEntryEdgeIndex];
+            const p2Out = points[(secondEntryEdgeIndex+1) % points.length];
+            const secondMidpoint = turf.midpoint(
+                turf.point([p2In.lng, p2In.lat]), 
+                turf.point([p2Out.lng, p2Out.lat])
+            ).geometry.coordinates;
+             
+            const rotatedSecondMidpointPt = turf.transformRotate(turf.point(secondMidpoint), rotationAngle, { pivot: centroid });
+            const secondY = rotatedSecondMidpointPt.geometry.coordinates[1];
+            
+            topRoadY = Math.max(centerY, secondY);
+            botRoadY = Math.min(centerY, secondY);
+        }
+
         insertRoad(turf.bboxPolygon([minX - 0.001, topRoadY - roadWidthDeg/2, maxX + 0.001, topRoadY + roadWidthDeg/2]), 't');
         insertRoad(turf.bboxPolygon([minX - 0.001, botRoadY - roadWidthDeg/2, maxX + 0.001, botRoadY + roadWidthDeg/2]), 'b');
         
@@ -662,7 +694,7 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
 
 // === KOMPONEN UTAMA ===
 const DEFAULT_WMS_LAYERS = [
-  { name: 'Geo Server - Plot_only', layers: 'dorado:plot_only' },
+  { name: 'Plot Per View', layers: 'dorado:plot_only' },
 ];
 
 export default function App() {
@@ -732,11 +764,33 @@ export default function App() {
   const [exportSurveyor, setExportSurveyor] = useState("");
   const [exportNotes, setExportNotes] = useState("");
   const [pricePerUnit, setPricePerUnit] = useState<number>(0);
+  const [njopEstimate, setNjopEstimate] = useState<string>('');
 
   // Kavling State
-  const [kavlingSettings, setKavlingSettings] = useState({ minArea: 100, minFront: 5, roadWidth: 5, entryEdgeIndex: -1, exitEdgeIndex: -1, layoutType: 'single_center' });
+  const [kavlingSettings, setKavlingSettings] = useState({ 
+      minArea: 100, 
+      minFront: 5, 
+      roadWidth: 5, 
+      entryEdgeIndex: -1, 
+      exitEdgeIndex: -1, 
+      secondEntryEdgeIndex: -1,
+      layoutType: 'single_center',
+      enableCulDeSac: false,
+      cornerChamfer: false,
+      maxDepth: 30,
+      setbackGSB: 3,
+      optMode: 'maximize'
+  });
   const [kavlings, setKavlings] = useState<any[]>([]);
   const [showKavlings, setShowKavlings] = useState(true);
+
+  // New Feature States
+  const [markers, setMarkers] = useState<{lat: number, lng: number, label: string}[]>([]);
+  const [isAddingMarker, setIsAddingMarker] = useState(false);
+  const [elevationProfile, setElevationProfile] = useState<{distance: number, elevation: number}[]>([]);
+  const [elevationStats, setElevationStats] = useState<{min: number, max: number, diff: number} | null>(null);
+  const [isFetchingElevation, setIsFetchingElevation] = useState(false);
+  const [showElevation, setShowElevation] = useState(false);
 
   // Search State
   const [mapCenter, setMapCenter] = useState<[number, number] | null>([-8.6705, 115.2126]);
@@ -782,6 +836,8 @@ export default function App() {
     return val === null ? 2 : Number(val);
   });
   const [mobileTab, setMobileTab] = useState<'map' | 'points' | 'stats'>('map');
+  const [showLeftSidebar, setShowLeftSidebar] = useState(true);
+  const [showRightSidebar, setShowRightSidebar] = useState(true);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [isSharing, setIsSharing] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<{[key: string]: boolean}>({});
@@ -1018,6 +1074,7 @@ export default function App() {
   const handleClear = () => {
     setPoints([]);
     setMeasurePoints([]);
+    setMarkers([]);
     setKavlings([]);
     setCurrentProjectId(null);
     localStorage.removeItem('calcare_points_draft');
@@ -1127,9 +1184,147 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [handleSearch]);
 
+  const estimateNJOP = (addressText: string): string => {
+    if (!addressText) return "";
+    const addr = addressText.toLowerCase();
+
+    // Area prime tourism
+    if (addr.match(/(canggu|seminyak|berawa|uluwatu|kuta|legian|tuban|pecatu|ungasan|nusa dua|jimbaran bay)/)) {
+        return "± Rp 3.000.000 – 15.000.000+/m² (Area Prime Tourism)";
+    }
+    // Lokasi premium Denpasar
+    if (addr.match(/(renon|sanur|denpasar m|denpasar p|denpasar s|denpasar t)/) || addr.match(/denpasar(?!.*(barat|utara))/)) {
+        return "± Rp 2.000.000 – 10.000.000+/m² (Lokasi Premium Denpasar)";
+    }
+    // Area Badung pinggiran
+    if (addr.match(/(mengwi|jimbaran|sempidi|dalung|kerobokan|abiansemal)/)) {
+        return "± Rp 1.000.000 – 5.000.000/m² (Area Badung Pinggiran)";
+    }
+    // Area berkembang
+    if (addr.match(/(gianyar|klungkung|ubud|kediri|denpasar barat|denpasar utara)/)) {
+        return "± Rp 500.000 – 3.000.000/m² (Area Berkembang)";
+    }
+    // Area pedesaan / luar pusat wisata
+    if (addr.match(/(tabanan|buleleng|jembrana|singaraja|negara|karangasem|bangli|payangan|tegallalang)/)) {
+        return "± Rp 100.000 – 1.500.000/m² (Area Pedesaan / Luar Pusat Wisata)";
+    }
+    // Fallback Bali
+    if (addr.match(/bali/)) {
+        return "Menunggu klasifikasi NJOP spesifik (Hanya estimasi dasar tersedia)";
+    }
+    return "Estimasi NJOP di luar area Bali belum tersedia.";
+  };
+
+  useEffect(() => {
+    if (points.length === 0 || isDrawing || isEditMode) {
+        if (points.length === 0) setNjopEstimate('');
+        return;
+    }
+    
+    // Debounce to fetch only when points are stable
+    const timer = setTimeout(async () => {
+        try {
+            const locLat = points[0].lat;
+            const locLng = points[0].lng;
+            const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${locLat}&lon=${locLng}&zoom=14&addressdetails=1&accept-language=id`);
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.display_name) {
+                    const estimate = estimateNJOP(data.display_name);
+                    setNjopEstimate(estimate);
+                }
+            }
+        } catch (err) {
+            console.error("Failed to estimate NJOP", err);
+        }
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [points, isDrawing, isEditMode]);
+
+  useEffect(() => {
+    if (points.length < 3 || isDrawing || isEditMode) {
+        if (points.length === 0) {
+            setElevationProfile([]);
+            setElevationStats(null);
+        }
+        return;
+    }
+
+    const timer = setTimeout(async () => {
+        setIsFetchingElevation(true);
+        try {
+            // Sampling up to 50 points along the perimeter to avoid massive URL
+            const pts = [...points, points[0]]; // close polygon
+            const lats = [];
+            const lngs = [];
+            
+            // Simple sub-sampling strategy for elevation profile
+            const maxSamples = 30;
+            const step = Math.max(1, Math.floor(pts.length / maxSamples));
+            
+            let currentDist = 0;
+            const profile = [];
+
+            for (let i = 0; i < pts.length; i += step) {
+                lats.push(pts[i].lat);
+                lngs.push(pts[i].lng);
+            }
+
+            const url = `https://api.open-meteo.com/v1/elevation?latitude=${lats.join(',')}&longitude=${lngs.join(',')}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error("Elevation API Error");
+            const data = await res.json();
+            
+            if (data && data.elevation) {
+                let min = Infinity;
+                let max = -Infinity;
+                
+                data.elevation.forEach((el: number, i: number) => {
+                    min = Math.min(min, el);
+                    max = Math.max(max, el);
+                    
+                    if (i > 0) {
+                        currentDist += mapInstanceRef.current?.distance([lats[i-1], lngs[i-1]], [lats[i], lngs[i]]) || 0;
+                    }
+                    
+                    profile.push({
+                        distance: currentDist,
+                        elevation: el
+                    });
+                });
+                
+                setElevationProfile(profile);
+                setElevationStats({ min, max, diff: max - min });
+            }
+        } catch (err) {
+            console.error(err);
+            setElevationProfile([]);
+            setElevationStats(null);
+        } finally {
+            setIsFetchingElevation(false);
+        }
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, [points, isDrawing, isEditMode]);
+
   // Nav Handlers
   const handleGenerateKavling = () => {
-      const k = subdividePolygon(points, kavlingSettings.roadWidth, kavlingSettings.minArea, kavlingSettings.minFront, kavlingSettings.entryEdgeIndex, kavlingSettings.exitEdgeIndex, kavlingSettings.layoutType);
+      const k = subdividePolygon(
+          points, 
+          kavlingSettings.roadWidth, 
+          kavlingSettings.minArea, 
+          kavlingSettings.minFront, 
+          kavlingSettings.entryEdgeIndex, 
+          kavlingSettings.exitEdgeIndex, 
+          kavlingSettings.layoutType,
+          kavlingSettings.enableCulDeSac,
+          kavlingSettings.cornerChamfer,
+          kavlingSettings.maxDepth,
+          kavlingSettings.setbackGSB,
+          kavlingSettings.optMode,
+          kavlingSettings.secondEntryEdgeIndex
+      );
       setKavlings(k);
       setShowKavlings(true);
       setActiveModal('none');
@@ -1209,7 +1404,7 @@ export default function App() {
             pdf.setFont("helvetica", "bold");
             pdf.setFontSize(22);
             pdf.setTextColor(26, 26, 26);
-            pdf.text("Calcare Surveyor Report", margin, 22);
+            pdf.text("Calcuare Surveyor Report", margin, 22);
             
             pdf.setLineWidth(0.5);
             pdf.setDrawColor(200, 200, 200);
@@ -1504,6 +1699,15 @@ export default function App() {
             pdf.text(`${formattedValue} (at ${formattedPrice} per ${areaUnit === 'are' ? 'are' : areaUnit === 'ha' ? 'ha' : 'm²'})`, margin + 45, currentY);
             currentY += 8;
         }
+
+        if (kavlings && kavlings.length > 0) {
+            pdf.text(`Subdivision (Kavling):`, margin, currentY);
+            const totalPlots = kavlings.filter(k => k.type !== 'road').length;
+            const roadArea = kavlings.filter(k => k.type === 'road').reduce((sum, k) => sum + (k.area || 0), 0);
+            const plotArea = kavlings.filter(k => k.type !== 'road').reduce((sum, k) => sum + (k.area || 0), 0);
+            pdf.text(`${totalPlots} Plots (${Math.round(plotArea)} m2) + Road/Fasum (${Math.round(roadArea)} m2)`, margin + 45, currentY);
+            currentY += 8;
+        }
         
         // Columns for Coordinates and Edges
         currentY += 10;
@@ -1641,11 +1845,19 @@ export default function App() {
        csvContent += `${idx + 1},${p.lat},${p.lng},${p.color || DEFAULT_POINT_COLOR}\n`;
      });
 
+     if (kavlings && kavlings.length > 0) {
+         csvContent += "\n\n--- AUTO KAVLINGS ---\n";
+         csvContent += "Label,Type,Area(m2)\n";
+         kavlings.forEach(k => {
+             csvContent += `${k.label || k.id},${k.type},${k.area ? Math.round(k.area) : 0}\n`;
+         });
+     }
+
      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
      const url = URL.createObjectURL(blob);
      const link = document.createElement("a");
      link.href = url;
-     link.download = `calcare_points_${new Date().getTime()}.csv`;
+     link.download = `calcare_data_${new Date().getTime()}.csv`;
      link.click();
      URL.revokeObjectURL(url);
      setActiveModal('none');
@@ -1975,10 +2187,30 @@ export default function App() {
     );
   };
 
+  const MarkerHandler = ({ 
+    active, setMarkers 
+  }: { 
+    active: boolean, 
+    setMarkers: React.Dispatch<React.SetStateAction<{lat: number, lng: number, label: string}[]>>
+  }) => {
+    useMapEvents({
+      click: (e) => {
+        if (!active) return;
+        const label = window.prompt("Nama Label Pin (misal: Akses Jalan Tol, Sumber Air, View Sunset):", "Pin Baru");
+        if (label) {
+            setMarkers(prev => [...prev, { lat: e.latlng.lat, lng: e.latlng.lng, label }]);
+            setIsAddingMarker(false); // auto turn off after placing one
+        }
+      }
+    });
+    return null;
+  };
+
   const MapClickHandler = ({ disabled, autoDetectActive }: { disabled?: boolean, autoDetectActive?: boolean }) => {
     const map = useMap();
     useMapEvents({
       click: async (e) => {
+        if (isAddingMarker) return; // handled by MarkerHandler
         if (autoDetectActive) {
             setIsDetecting(true);
             try {
@@ -1986,11 +2218,16 @@ export default function App() {
                 const size = map.getSize();
                 const x = Math.round(e.containerPoint.x);
                 const y = Math.round(e.containerPoint.y);
+                
+                const crs = map.options.crs;
+                const sw = crs.project(bounds.getSouthWest());
+                const ne = crs.project(bounds.getNorthEast());
+                const bboxStr = `${sw.x},${sw.y},${ne.x},${ne.y}`;
 
                 // Target all mapped GeoServer layers for query
                 const queryLayers = wmsLayersList.map(l => l.layers).slice(0, 20).join(',');
 
-                const u = `https://geo2.perare.io/geoserver/dorado/wms?request=GetFeatureInfo&service=WMS&srs=EPSG:4326&version=1.1.1&format=image/png&bbox=${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}&height=${size.y}&width=${size.x}&layers=${queryLayers}&query_layers=${queryLayers}&info_format=application/json&x=${x}&y=${y}&feature_count=1`;
+                const u = `https://geo2.perare.io/geoserver/dorado/wms?request=GetFeatureInfo&service=WMS&srs=EPSG:3857&version=1.1.1&format=image/png&bbox=${bboxStr}&height=${size.y}&width=${size.x}&layers=${queryLayers}&query_layers=${queryLayers}&info_format=application/json&x=${x}&y=${y}&feature_count=1`;
                 
                 const response = await fetch(u);
                 if (!response.ok) throw new Error('Network error');
@@ -2004,8 +2241,11 @@ export default function App() {
                            coords = coords[0];
                        }
                        const ring = coords[0];
-                       // GeoJSON is [lng, lat]
-                       const newPoints = ring.map((pt: number[]) => ({ lat: pt[1], lng: pt[0], color: DEFAULT_POINT_COLOR }));
+                       
+                       const newPoints = ring.map((pt: number[]) => {
+                           const ll = crs.unproject({ x: pt[0], y: pt[1] } as any);
+                           return { lat: ll.lat, lng: ll.lng, color: DEFAULT_POINT_COLOR };
+                       });
                        if (newPoints.length > 1 && newPoints[0].lat === newPoints[newPoints.length-1].lat && newPoints[0].lng === newPoints[newPoints.length-1].lng) {
                            newPoints.pop();
                        }
@@ -2162,7 +2402,7 @@ const CustomZoomControl = () => {
 
         <div className="relative z-20 bg-[var(--color-surface)]/80 backdrop-blur-md border border-[var(--color-fg)]/20 shadow-2xl p-8 max-w-sm w-full mx-4">
           <div className="flex justify-between items-center mb-8">
-            <h1 className="font-serif italic text-3xl font-bold tracking-tight">Calcare</h1>
+            <h1 className="font-serif italic text-3xl font-bold tracking-tight">Calcuare</h1>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-6">
@@ -2214,7 +2454,7 @@ const CustomZoomControl = () => {
       {/* Modals Overlay */}
       {activeModal !== 'none' && (
         <div className="fixed inset-0 bg-[var(--color-bg)]/80 backdrop-blur-sm z-[3000] flex items-center justify-center p-4">
-            <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] md:max-h-[85vh]">
+            <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] lg:max-h-[85vh]">
                 <div className="flex justify-between items-center p-6 border-b border-[var(--color-fg)]/10 shrink-0">
                     <h3 className="font-serif italic text-[22px]">
                         {activeModal === 'library' && 'Project Library'}
@@ -2565,6 +2805,26 @@ const CustomZoomControl = () => {
                                                 })}
                                             </select>
                                         </div>
+                                        {kavlingSettings.layoutType === 'double_parallel' && (
+                                            <div>
+                                                <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Titik Sisi Jalan Kedua</label>
+                                                <select 
+                                                    value={kavlingSettings.secondEntryEdgeIndex}
+                                                    onChange={(e) => setKavlingSettings(prev => ({...prev, secondEntryEdgeIndex: Number(e.target.value)}))}
+                                                    className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
+                                                >
+                                                    <option value={-1}>Otomatis Pararel</option>
+                                                    {points.map((p, i) => {
+                                                        const nextI = (i + 1) % points.length;
+                                                        return (
+                                                            <option key={i} value={i}>
+                                                                Dari P{i+1} ke P{nextI+1}
+                                                            </option>
+                                                        );
+                                                    })}
+                                                </select>
+                                            </div>
+                                        )}
                                     </>
                                 )}
 
@@ -2627,7 +2887,80 @@ const CustomZoomControl = () => {
                                 </div>
                             </div>
                             
-                            <div className="bg-[var(--color-fg)]/5 p-4 border-l-2 border-[var(--color-fg)]">
+                            {/* ADVANCED SETTINGS */}
+                            <div className="space-y-4 pt-4 border-t border-[var(--color-fg)]/10">
+                                <label className="text-[12px] uppercase tracking-widest font-bold opacity-80 block">Advanced Preferences [BETA]</label>
+                                
+                                <div className="grid grid-cols-2 gap-4">
+                                    <label className="flex items-center gap-2 cursor-pointer text-[11px] font-semibold opacity-80">
+                                        <input 
+                                            type="checkbox"
+                                            checked={kavlingSettings.enableCulDeSac}
+                                            onChange={(e) => setKavlingSettings(prev => ({...prev, enableCulDeSac: e.target.checked}))}
+                                            className="accent-[var(--color-fg)] w-4 h-4"
+                                        />
+                                        <div>
+                                            Gunakan Cul-de-sac (Buntu)
+                                            <span className="block text-[9px] font-normal opacity-50">Radius Putar Balik</span>
+                                        </div>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer text-[11px] font-semibold opacity-80">
+                                        <input 
+                                            type="checkbox"
+                                            checked={kavlingSettings.cornerChamfer}
+                                            onChange={(e) => setKavlingSettings(prev => ({...prev, cornerChamfer: e.target.checked}))}
+                                            className="accent-[var(--color-fg)] w-4 h-4"
+                                        />
+                                        <div>
+                                            Corner Chamfer
+                                            <span className="block text-[9px] font-normal opacity-50">Toleransi Kavling Hook</span>
+                                        </div>
+                                    </label>
+                                </div>
+
+                                <div>
+                                    <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 flex justify-between">
+                                        <span>Batas Kedalaman Kavling (m)</span>
+                                        <span>{kavlingSettings.maxDepth}m</span>
+                                    </label>
+                                    <input 
+                                        type="range"
+                                        min={10} max={100} step={1}
+                                        value={kavlingSettings.maxDepth}
+                                        onChange={(e) => setKavlingSettings(prev => ({...prev, maxDepth: Number(e.target.value)}))}
+                                        className="w-full accent-[var(--color-fg)]"
+                                    />
+                                    <div className="flex justify-between text-[9px] opacity-40 font-mono mt-1">
+                                        <span>10m</span><span>100m</span>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Garis Sempadan / GSB (m)</label>
+                                    <input 
+                                        type="number" 
+                                        value={kavlingSettings.setbackGSB}
+                                        onChange={(e) => setKavlingSettings(prev => ({...prev, setbackGSB: Number(e.target.value)}))}
+                                        className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
+                                    />
+                                    <p className="text-[9px] mt-1 opacity-50">Visualisasi area efektif bangunan (titik putus)</p>
+                                </div>
+
+                                <div>
+                                    <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Prioritas Susunan Lot</label>
+                                    <select 
+                                        value={kavlingSettings.optMode}
+                                        onChange={(e) => setKavlingSettings(prev => ({...prev, optMode: e.target.value}))}
+                                        className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
+                                    >
+                                        <option value="maximize">Maksimalkan Keuntungan (Dapatkan Lot Terbanyak)</option>
+                                        <option value="even">Simetris (Ukuran Disamaratakan di Setiap Lajur)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="bg-[var(--color-fg)]/5 p-4 border-l-2 border-[var(--color-fg)] mt-4">
                                 <p className="text-[11px] font-mono opacity-80 leading-relaxed">
                                     Hasil kavling akan tergambar langsung di peta dan juga akan ikut diexport dalam file DXF maupun PDF secara otomatis.
                                 </p>
@@ -2720,10 +3053,10 @@ const CustomZoomControl = () => {
         </div>
       )}
 
-      <header className="flex justify-between items-center px-4 md:px-10 py-4 md:py-6 border-b border-[var(--color-fg)]/10 bg-[var(--color-bg)] z-[2000] sticky top-0">
-        <div className="flex flex-col md:flex-row md:items-baseline gap-0 md:gap-2">
+      <header className="flex justify-between items-center px-4 lg:px-10 py-4 lg:py-6 border-b border-[var(--color-fg)]/10 bg-[var(--color-bg)] z-[2000] sticky top-0">
+        <div className="flex flex-col lg:flex-row lg:items-baseline gap-0 lg:gap-2">
           <div className="flex items-baseline gap-2">
-            <span className="text-[20px] md:text-[26px] font-serif italic font-bold tracking-tight">Calcare</span>
+            <span className="text-[20px] lg:text-[26px] font-serif italic font-bold tracking-tight">Calcuare</span>
             <button 
               onClick={handleQuickSave} 
               disabled={points.length === 0}
@@ -2747,9 +3080,9 @@ const CustomZoomControl = () => {
               )}
             </AnimatePresence>
           </div>
-          <span className="text-[10px] md:text-[12px] uppercase tracking-widest opacity-50 block md:inline font-mono">V.1 by Rifky Rangga</span>
+          <span className="text-[10px] lg:text-[12px] uppercase tracking-widest opacity-50 block lg:inline font-mono">V.1 by Rifky Rangga</span>
         </div>
-        <div className="flex items-center gap-3 md:gap-8">
+        <div className="flex items-center gap-3 lg:gap-8">
           <nav className="hidden lg:flex gap-8 text-[12px] uppercase tracking-widest font-semibold">
             <button onClick={() => setActiveModal('none')} className={`cursor-pointer pb-1 ${activeModal === 'none' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'surveyorMode')}</button>
             <button onClick={() => setActiveModal('library')} className={`cursor-pointer pb-1 ${activeModal === 'library' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'projectLibrary')}</button>
@@ -2758,7 +3091,7 @@ const CustomZoomControl = () => {
             <button onClick={() => setActiveModal('export')} className={`cursor-pointer pb-1 ${activeModal === 'export' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'exportData')}</button>
           </nav>
 
-          <div className="hidden lg:flex items-center gap-2 md:gap-4 ml-2 md:ml-0 md:border-l border-[var(--color-fg)]/10 md:pl-4">
+          <div className="hidden lg:flex items-center gap-2 lg:gap-4 ml-2 lg:ml-0 lg:border-l border-[var(--color-fg)]/10 lg:pl-4">
             <div className="flex items-center gap-3">
               <span className="text-[10px] font-bold uppercase tracking-widest leading-none px-2 py-1 bg-[var(--color-fg)]/10 rounded-sm">LOCAL MODE</span>
             </div>
@@ -2796,14 +3129,19 @@ const CustomZoomControl = () => {
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col md:flex-row overflow-hidden relative mb-[64px] md:mb-0">
+      <main className="flex-1 flex flex-col lg:flex-row overflow-hidden relative mb-[64px] lg:mb-0">
         
         {/* Sidebar: Input Points */}
-        <aside className={`${mobileTab === 'points' ? 'flex' : 'hidden md:flex'} w-full md:w-[300px] lg:w-[350px] border-r border-[var(--color-fg)]/10 p-5 lg:p-8 flex flex-col bg-[var(--color-bg)] h-full shrink-0 z-[1000] overflow-hidden`}>
+        <aside className={`${mobileTab === 'points' ? 'flex' : (showLeftSidebar ? 'hidden lg:flex' : 'hidden')} w-full lg:w-[350px] border-r border-[var(--color-fg)]/10 p-5 lg:p-8 flex flex-col bg-[var(--color-bg)] h-full shrink-0 z-[1000] overflow-hidden`}>
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-[12px] uppercase tracking-widest opacity-50 font-bold">{t(lang, 'inputCoordsHeader')}</h2>
-            <div className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-widest ${isFreehand ? 'bg-orange-500 text-white' : isEditMode ? 'bg-blue-500 text-white' : 'bg-green-500 text-white'}`}>
-              {isFreehand ? t(lang, 'freehand') : isEditMode ? t(lang, 'editMode') : t(lang, 'addMode')}
+            <div className="flex gap-2 items-center">
+              <div className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-widest ${isFreehand ? 'bg-orange-500 text-white' : isEditMode ? 'bg-blue-500 text-white' : 'bg-green-500 text-white'}`}>
+                {isFreehand ? t(lang, 'freehand') : isEditMode ? t(lang, 'editMode') : t(lang, 'addMode')}
+              </div>
+              <button className="hidden lg:block opacity-50 hover:opacity-100" onClick={() => setShowLeftSidebar(false)}>
+                <X size={16} />
+              </button>
             </div>
           </div>
           
@@ -2944,63 +3282,98 @@ const CustomZoomControl = () => {
             )}
           </div>
           
-          {(points.length > 0 || measurePoints.length > 0) && (
-            <div className="mt-8 space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <button 
-                   onClick={() => {
-                     const next = !isEditMode;
-                     setIsEditMode(next);
-                     if (next) {
-                       setIsFreehand(false);
-                       setIsMeasuring(false);
-                     }
-                   }}
-                   className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-colors flex justify-center items-center gap-2 ${isEditMode ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
-                >
-                  <MousePointer2 size={14} /> 
-                  {isEditMode ? t(lang, 'editModeActive') : t(lang, 'editMode')}
-                </button>
-                <button 
-                  onClick={() => {
-                    const next = !isFreehand;
-                    setIsFreehand(next);
-                    if (next) {
-                      setIsEditMode(false);
-                      setIsMeasuring(false);
-                    }
-                  }}
-                  className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-colors flex justify-center items-center gap-2 ${isFreehand ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
-                >
-                  <Pencil size={14} /> 
-                  {isFreehand ? t(lang, 'freehandActive') : t(lang, 'freehand')}
-                </button>
-              </div>
+          <div className="mt-8 space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <button 
+                 onClick={() => {
+                   const next = !isEditMode;
+                   setIsEditMode(next);
+                   if (next) {
+                     setIsFreehand(false);
+                     setIsMeasuring(false);
+                     setIsAddingMarker(false);
+                   }
+                 }}
+                 className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-colors flex justify-center items-center gap-2 ${isEditMode ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
+              >
+                <MousePointer2 size={14} /> 
+                {isEditMode ? t(lang, 'editModeActive') : t(lang, 'editMode')}
+              </button>
+              <button 
+                onClick={() => {
+                  const next = !isFreehand;
+                  setIsFreehand(next);
+                  if (next) {
+                    setIsEditMode(false);
+                    setIsMeasuring(false);
+                    setIsAddingMarker(false);
+                  }
+                }}
+                className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-colors flex justify-center items-center gap-2 ${isFreehand ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
+              >
+                <Pencil size={14} /> 
+                {isFreehand ? t(lang, 'freehandActive') : t(lang, 'freehand')}
+              </button>
+            </div>
 
-              <div className="mb-2">
-                <button 
-                  onClick={() => {
-                    const next = !isAutoDetect;
-                    setIsAutoDetect(next);
-                    if (next) {
-                      setIsFreehand(false);
-                      setIsEditMode(false);
-                      setIsMeasuring(false);
-                      setIsDrawing(false);
-                    }
-                  }}
-                  className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-all flex justify-center items-center gap-2 shadow-sm ${(isAutoDetect || isDetecting) ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
-                >
-                  {(isDetecting) ? (
-                     <div className="w-3 h-3 border-2 border-inherit border-t-transparent animate-spin rounded-full" />
-                  ) : (
-                     <Crosshair size={14} /> 
-                  )}
-                  {isAutoDetect ? "CLICK MAP TO DETECT" : isDetecting ? "DETECTING..." : "AUTO DETECT PLOT"}
-                </button>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <button 
+                onClick={() => {
+                  const next = !isMeasuring;
+                  setIsMeasuring(next);
+                  if (next) {
+                    setIsFreehand(false);
+                    setIsEditMode(false);
+                    setIsAddingMarker(false);
+                  }
+                }}
+                className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-colors flex justify-center items-center gap-2 ${isMeasuring ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
+              >
+                <Ruler size={14} /> 
+                {isMeasuring ? "UKUR AKTIF" : "UKUR"}
+              </button>
+              <button 
+                onClick={() => {
+                  const next = !isAddingMarker;
+                  setIsAddingMarker(next);
+                  if (next) {
+                    setIsFreehand(false);
+                    setIsEditMode(false);
+                    setIsMeasuring(false);
+                  }
+                }}
+                className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-colors flex justify-center items-center gap-2 ${isAddingMarker ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
+              >
+                <MapPin size={14} /> 
+                {isAddingMarker ? "KLIK MAP" : "ANOTASI"}
+              </button>
+            </div>
+
+            <div className="mb-2 mt-2">
+              <button 
+                onClick={() => {
+                  const next = !isAutoDetect;
+                  setIsAutoDetect(next);
+                  if (next) {
+                    setIsFreehand(false);
+                    setIsEditMode(false);
+                    setIsMeasuring(false);
+                    setIsDrawing(false);
+                  }
+                }}
+                className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-all flex justify-center items-center gap-2 shadow-sm ${(isAutoDetect || isDetecting) ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
+              >
+                {(isDetecting) ? (
+                   <div className="w-3 h-3 border-2 border-inherit border-t-transparent animate-spin rounded-full" />
+                ) : (
+                   <Crosshair size={14} /> 
+                )}
+                {isAutoDetect ? "CLICK MAP TO DETECT" : isDetecting ? "DETECTING..." : "AUTO DETECT PLOT"}
+              </button>
+            </div>
+            
+            {(points.length > 0 || measurePoints.length > 0 || markers.length > 0) && (
+              <div className="grid grid-cols-2 gap-2 mt-4">
                 <button 
                   onClick={handleUndo} 
                   className="w-full border border-[var(--color-fg)] text-[var(--color-fg)] bg-transparent py-4 text-[12px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-colors flex justify-center items-center gap-2"
@@ -3014,8 +3387,8 @@ const CustomZoomControl = () => {
                   <Eraser size={14} /> {t(lang, 'clear')}
                 </button>
               </div>
-            </div>
-          )}
+            )}
+          </div>
           
           <div className="mt-8 text-center text-[12px] font-mono uppercase tracking-widest opacity-30 select-none">
              ©2026 All Rights Reserved
@@ -3023,11 +3396,29 @@ const CustomZoomControl = () => {
         </aside>
 
         {/* Main: Map Visualization */}
-        <section className={`${mobileTab === 'map' ? 'block' : 'hidden md:block'} flex-1 bg-[var(--color-map)] relative isolate h-full md:h-auto`}>
+        <section className={`${mobileTab === 'map' ? 'block' : 'hidden lg:block'} flex-1 bg-[var(--color-map)] relative isolate h-full lg:h-auto`}>
+          {!showLeftSidebar && (
+            <button 
+              onClick={() => setShowLeftSidebar(true)}
+              className="absolute left-0 top-1/2 -translate-y-1/2 z-[2000] bg-[var(--color-surface)] text-[var(--color-fg)] p-2 rounded-r border border-l-0 border-[var(--color-fg)]/20 shadow-md flex items-center justify-center opacity-70 hover:opacity-100 hidden lg:flex"
+            >
+              <Menu size={16} />
+            </button>
+          )}
+
+          {!showRightSidebar && (
+            <button 
+              onClick={() => setShowRightSidebar(true)}
+              className="absolute right-0 top-1/2 -translate-y-1/2 z-[2000] bg-[var(--color-surface)] text-[var(--color-fg)] p-2 rounded-l border border-r-0 border-[var(--color-fg)]/20 shadow-md flex items-center justify-center opacity-70 hover:opacity-100 hidden lg:flex"
+            >
+              <Menu size={16} />
+            </button>
+          )}
+
           <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#1A1A1A 1px, transparent 1px)', backgroundSize: '20px 20px', zIndex: 0 }}></div>
           
           {/* Floating Search Container */}
-          <div className="absolute top-4 left-4 right-16 md:left-6 md:right-auto md:w-[320px] z-[2000] flex flex-col gap-1">
+          <div className="absolute top-4 left-4 right-16 lg:left-6 lg:right-auto lg:w-[320px] z-[2000] flex flex-col gap-1">
             <form onSubmit={handleSearch} className="bg-[var(--color-surface)] border border-[var(--color-fg)]/30 shadow-md flex items-center px-4 py-3 group focus-within:border-[var(--color-fg)]">
               {isSearching ? (
                 <div className="w-3.5 h-3.5 border-2 border-[var(--color-fg)]/30 border-t-[var(--color-fg)] rounded-full animate-spin mr-3"></div>
@@ -3061,7 +3452,7 @@ const CustomZoomControl = () => {
                   initial={{ opacity: 0, y: 20, x: '-50%' }}
                   animate={{ opacity: 1, y: 0, x: '-50%' }}
                   exit={{ opacity: 0, y: 20, x: '-50%' }}
-                  className="fixed bottom-24 md:bottom-10 left-1/2 z-[3000] w-auto pointer-events-auto"
+                  className="fixed bottom-24 lg:bottom-10 left-1/2 z-[3000] w-auto pointer-events-auto"
                 >
                   <button
                     onClick={() => setIsFreehand(false)}
@@ -3373,6 +3764,17 @@ const CustomZoomControl = () => {
                                         fillOpacity: 0.4
                                     })}
                                 />
+                                {k.setbackPolygon && (
+                                    <GeoJSON 
+                                        data={k.setbackPolygon} 
+                                        style={() => ({
+                                            color: '#ef4444', // red
+                                            weight: 1,
+                                            dashArray: '3, 4',
+                                            fillOpacity: 0
+                                        })}
+                                    />
+                                )}
                                 {k.center && k.type !== 'road' && (
                                     <>
                                         {/* Center Label (e.g. A1, 110 M2) */}
@@ -3534,7 +3936,46 @@ const CustomZoomControl = () => {
               </LayersControl.Overlay>
             </LayersControl>
             
-            <MapClickHandler disabled={isFreehand || isEditMode || isMeasuring} autoDetectActive={isAutoDetect} />
+            {/* Custom Annotations */}
+            {markers.map((m, idx) => (
+                <Marker 
+                    key={`custom-marker-${idx}`} 
+                    position={[m.lat, m.lng]} 
+                    draggable={!isFreehand && !isEditMode && !isMeasuring}
+                    eventHandlers={{
+                        dragend: (e) => {
+                            const newPos = e.target.getLatLng();
+                            setMarkers(prev => {
+                                const newM = [...prev];
+                                newM[idx].lat = newPos.lat;
+                                newM[idx].lng = newPos.lng;
+                                return newM;
+                            });
+                        },
+                        click: () => {
+                            if (window.confirm(`Hapus anotasi "${m.label}"?`)) {
+                                setMarkers(prev => prev.filter((_, i) => i !== idx));
+                            }
+                        }
+                    }}
+                    icon={L.divIcon({
+                        className: 'custom-annotation',
+                        html: `<div class="relative group">
+                            <div class="absolute -top-6 -left-3 bg-red-500 w-6 h-6 rounded-full rounded-bl-none rotate-45 border-2 border-[var(--color-bg)] shadow-xl flex items-center justify-center">
+                              <div class="-rotate-45 block w-2 h-2 rounded-full bg-[var(--color-bg)] opacity-40"></div>
+                            </div>
+                        </div>`,
+                        iconSize: [0, 0]
+                    })}
+                >
+                    <Tooltip permanent direction="bottom" offset={[0, 4]} className="!bg-[var(--color-surface)] !text-[var(--color-fg)] !border-[var(--color-fg)]/20 !font-bold !text-[10px] !uppercase !tracking-widest !shadow-xl">
+                        {m.label}
+                    </Tooltip>
+                </Marker>
+            ))}
+
+            <MarkerHandler active={isAddingMarker} setMarkers={setMarkers} />
+            <MapClickHandler disabled={isFreehand || isEditMode || isMeasuring || isAddingMarker} autoDetectActive={isAutoDetect} />
             <FreehandHandler 
                 active={isFreehand} 
                 isDrawing={isDrawing} 
@@ -3556,25 +3997,30 @@ const CustomZoomControl = () => {
         </section>
 
         {/* Right: Results Panel */}
-        <aside className={`${mobileTab === 'stats' ? 'flex' : 'hidden md:flex'} w-full md:w-[320px] lg:w-[380px] p-5 lg:p-8 bg-[var(--color-surface)] border-l border-[var(--color-fg)]/10 flex flex-col z-[1000] shrink-0 h-full overflow-y-auto`}>
+        <aside className={`${mobileTab === 'stats' ? 'flex' : (showRightSidebar ? 'hidden lg:flex' : 'hidden')} w-full lg:w-[380px] p-5 lg:p-8 bg-[var(--color-surface)] border-l border-[var(--color-fg)]/10 flex flex-col z-[1000] shrink-0 h-full overflow-y-auto`}>
           <div className="flex items-center justify-between mb-10">
             <h2 className="text-[12px] uppercase tracking-widest opacity-50 font-bold">02 // {t(lang, 'metricsHover')}</h2>
-            <AnimatePresence>
-                {autoSaveStatus !== 'idle' && (
-                    <motion.div 
-                        initial={{ opacity: 0, x: 10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0 }}
-                        className="flex items-center gap-1.5 text-[9px] uppercase font-bold tracking-tighter opacity-40"
-                    >
-                        {autoSaveStatus === 'saving' ? (
-                            <><motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}><Settings size={10} /></motion.div> {t(lang, 'autoSaving')}</>
-                        ) : (
-                            <><Check size={10} className="text-green-500" /> {t(lang, 'autoSaved')}</>
-                        )}
-                    </motion.div>
-                )}
-            </AnimatePresence>
+            <div className="flex items-center gap-4">
+              <AnimatePresence>
+                  {autoSaveStatus !== 'idle' && (
+                      <motion.div 
+                          initial={{ opacity: 0, x: 10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0 }}
+                          className="flex items-center gap-1.5 text-[9px] uppercase font-bold tracking-tighter opacity-40"
+                      >
+                          {autoSaveStatus === 'saving' ? (
+                              <><motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}><Settings size={10} /></motion.div> {t(lang, 'autoSaving')}</>
+                          ) : (
+                              <><Check size={10} className="text-green-500" /> {t(lang, 'autoSaved')}</>
+                          )}
+                      </motion.div>
+                  )}
+              </AnimatePresence>
+              <button className="hidden lg:block opacity-50 hover:opacity-100" onClick={() => setShowRightSidebar(false)}>
+                <X size={16} />
+              </button>
+            </div>
           </div>
           
           <div className="mb-12">
@@ -3635,6 +4081,12 @@ const CustomZoomControl = () => {
                 : <span className="opacity-30">Rp 0,00</span>
               }
             </div>
+            {njopEstimate && (
+              <div className="mt-3 text-[10px] font-mono opacity-60 bg-[var(--color-fg)]/5 p-2 border-l-2 border-[var(--color-accent)]">
+                <strong className="block mb-1 text-[var(--color-fg)]">💡 Estimasi NJOP Regional:</strong>
+                {njopEstimate}
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-8 mt-6">
@@ -3660,11 +4112,80 @@ const CustomZoomControl = () => {
               </div>
             </div>
 
+            {points.length >= 3 && (
+            <div className="border-t border-[var(--color-fg)]/10 pt-4 text-[var(--color-fg)]">
+              <label className="text-[12px] uppercase opacity-40 flex items-center mb-2 font-bold justify-between">
+                <div className="flex items-center gap-1">Elevasi / Topografi Lahan <MetricTooltip content="Profil elevasi/ketinggian disepanjang batas lahan (diambil via Open-Meteo API)." /></div>
+                {isFetchingElevation && <div className="w-3 h-3 border-2 border-[var(--color-fg)] border-t-transparent animate-spin rounded-full" />}
+              </label>
+              {elevationStats ? (
+                  <div className="mt-2">
+                     <div className="flex gap-4 mb-2 text-[10px] font-mono opacity-80 uppercase">
+                         <div>Min: <span className="font-bold text-[12px]">{elevationStats.min.toFixed(1)}m</span></div>
+                         <div>Max: <span className="font-bold text-[12px]">{elevationStats.max.toFixed(1)}m</span></div>
+                         <div>Diff: <span className="font-bold text-[12px] text-orange-500">{elevationStats.diff.toFixed(1)}m</span></div>
+                     </div>
+                     <div className="w-full h-24 mb-1">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={elevationProfile} margin={{top: 5, right:0, left:0, bottom:0}}>
+                               <defs>
+                                  <linearGradient id="colorElev" x1="0" y1="0" x2="0" y2="1">
+                                     <stop offset="5%" stopColor="var(--color-fg)" stopOpacity={0.3}/>
+                                     <stop offset="95%" stopColor="var(--color-fg)" stopOpacity={0}/>
+                                  </linearGradient>
+                               </defs>
+                                <RechartsTooltip 
+                                    contentStyle={{backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-fg)', fontSize:'10px', color: 'var(--color-fg)', fontFamily:'monospace'}} 
+                                    labelFormatter={(val) => `Jarak: ${Number(val).toFixed(0)}m`} 
+                                    formatter={(val: number) => [`${val.toFixed(1)}m`, 'Elevasi']}
+                                />
+                                <Area type="monotone" dataKey="elevation" stroke="var(--color-fg)" strokeWidth={1} fillOpacity={1} fill="url(#colorElev)" isAnimationActive={false} />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                     </div>
+                  </div>
+              ) : (
+                  <div className="text-[10px] uppercase font-mono opacity-40 italic mt-2">Sedang memuat data elevasi...</div>
+              )}
+            </div>
+            )}
+
             <div className="border-t border-[var(--color-fg)]/10 pt-4 text-[var(--color-fg)]">
               <label className="text-[12px] uppercase opacity-40 flex items-center mb-2 font-bold">
                 Auto Kavling (BETA)
                 <MetricTooltip content="Automatically subdivide area with a road" />
               </label>
+              
+              {kavlings.length > 0 && (
+                <div className="mb-3 space-y-2">
+                    <div className="flex justify-between items-center text-[11px] font-mono border-b border-[var(--color-fg)]/10 pb-1">
+                        <span>Total Plot Dijual:</span>
+                        <span className="font-bold text-[13px]">{kavlings.filter(k => k.type !== 'road').length} Unit</span>
+                    </div>
+                    <div className="flex justify-between items-center text-[10px] uppercase tracking-wider">
+                        <span>Fasos / Jalan:</span>
+                        <span className="font-mono font-bold text-red-500">
+                            {Math.round(kavlings.filter(k => k.type === 'road').reduce((a, b) => a + (b.area || 0), 0))} m²
+                        </span>
+                    </div>
+                    <div className="flex justify-between items-center text-[10px] uppercase tracking-wider mb-2">
+                        <span>Total Luas Kavling:</span>
+                        <span className="font-mono font-bold text-green-600">
+                            {Math.round(kavlings.filter(k => k.type !== 'road').reduce((a, b) => a + (b.area || 0), 0))} m²
+                        </span>
+                    </div>
+                    <label className="flex items-center gap-2 text-[10px] uppercase font-bold cursor-pointer mt-2 pt-2 border-t border-[var(--color-fg)]/10">
+                        <input 
+                            type="checkbox" 
+                            checked={showKavlings} 
+                            onChange={(e) => setShowKavlings(e.target.checked)}
+                            className="accent-[var(--color-fg)]"
+                        />
+                        Tampilkan Overlay Kavling
+                    </label>
+                </div>
+              )}
+
               <button 
                   onClick={() => setActiveModal('kavling')}
                   disabled={points.length < 3}
@@ -3699,7 +4220,7 @@ const CustomZoomControl = () => {
       </main>
 
       {/* Mobile Navigation Bar */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-[var(--color-surface)] border-t border-[var(--color-fg)]/10 z-[3000] flex justify-around items-center px-2 py-3 shadow-[0_-5px_25px_rgba(0,0,0,0.1)]">
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-[var(--color-surface)] border-t border-[var(--color-fg)]/10 z-[3000] flex justify-around items-center px-2 py-3 shadow-[0_-5px_25px_rgba(0,0,0,0.1)]">
         {(['map', 'points', 'stats'] as const).map((tab) => (
             <button 
               key={tab}
