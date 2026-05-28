@@ -3317,6 +3317,7 @@ const CustomZoomControl = () => {
           <div className="mt-8 space-y-3">
             <div className="grid grid-cols-2 gap-2">
               <button 
+                 title="Pilih dan geser titik koordinat batas yang sudah ada"
                  onClick={() => {
                    const next = !isEditMode;
                    setIsEditMode(next);
@@ -3332,6 +3333,7 @@ const CustomZoomControl = () => {
                 {isEditMode ? t(lang, 'editModeActive') : t(lang, 'editMode')}
               </button>
               <button 
+                title="Gambar batas lahan secara bebas menggunakan kursor"
                 onClick={() => {
                   const next = !isFreehand;
                   setIsFreehand(next);
@@ -3350,6 +3352,7 @@ const CustomZoomControl = () => {
 
             <div className="grid grid-cols-2 gap-2 mt-2">
               <button 
+                title="Ukur jarak antar titik di peta"
                 onClick={() => {
                   const next = !isMeasuring;
                   setIsMeasuring(next);
@@ -3365,6 +3368,7 @@ const CustomZoomControl = () => {
                 {isMeasuring ? "UKUR AKTIF" : "UKUR"}
               </button>
               <button 
+                title="Tambahkan penanda lokasi kustom di peta"
                 onClick={() => {
                   const next = !isAddingMarker;
                   setIsAddingMarker(next);
@@ -3383,6 +3387,7 @@ const CustomZoomControl = () => {
 
             <div className="mb-2 mt-2">
               <button 
+                title="Klik pada bidang / area di peta untuk mendeteksi batas lahan otomatis"
                 onClick={() => {
                   const next = !isAutoDetect;
                   setIsAutoDetect(next);
@@ -3407,12 +3412,14 @@ const CustomZoomControl = () => {
             {(points.length > 0 || measurePoints.length > 0 || markers.length > 0) && (
               <div className="grid grid-cols-2 gap-2 mt-4">
                 <button 
+                  title="Batalkan aksi poin sebelumnya"
                   onClick={handleUndo} 
                   className="w-full border border-[var(--color-fg)] text-[var(--color-fg)] bg-transparent py-4 text-[12px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-colors flex justify-center items-center gap-2"
                 >
                   <ArrowLeft size={14} /> {t(lang, 'undo')}
                 </button>
                 <button 
+                  title="Hapus semua data poin dan kavling"
                   onClick={handleClear} 
                   className="w-full border border-[var(--color-fg)] text-[var(--color-bg)] bg-[var(--color-fg)] py-4 text-[12px] uppercase tracking-widest font-bold hover:bg-red-700 hover:border-red-700 transition-colors flex justify-center items-center gap-2"
                 >
