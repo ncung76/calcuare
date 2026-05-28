@@ -385,7 +385,7 @@ function calculateStats(points: {lat: number, lng: number}[]) {
   }
 }
 
-function subdividePolygon(points: any[], roadWidth: number, minArea: number, minFront: number, entryEdgeIndex: number = -1, exitEdgeIndex: number = -1, layoutType: string = 'single_center', enableCulDeSac: boolean = false, cornerChamfer: boolean = false, maxDepth: number = 30, setbackGSB: number = 0, optMode: string = 'maximize', secondEntryEdgeIndex: number = -1) {
+function subdividePolygon(points: any[], roadWidth: number, minArea: number, minFront: number, entryEdgeIndex: string = "-1", exitEdgeIndex: string = "-1", layoutType: string = 'single_center', enableCulDeSac: boolean = false, cornerChamfer: boolean = false, maxDepth: number = 30, setbackGSB: number = 0, optMode: string = 'maximize', secondEntryEdgeIndex: string = "-1") {
   try {
     if (points.length < 3) return [];
     
@@ -415,13 +415,34 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
     let rotationAngle = layoutType === 'no_road_split_2' ? 90 - fallbackAngle : -fallbackAngle;
     let edgeMidpoint = fallbackEdgeMidpoint;
 
-    if (entryEdgeIndex >= 0 && entryEdgeIndex < points.length && exitEdgeIndex >= 0 && exitEdgeIndex < points.length && entryEdgeIndex !== exitEdgeIndex) {
-        const p1In = points[entryEdgeIndex];
-        const p1Out = points[(entryEdgeIndex+1) % points.length];
+    const parseIndex = (val: string | number) => {
+        if (!val || val === "-1" || val === -1) return null;
+        if (typeof val === 'string') {
+            const pts = val.split(',');
+            if (pts.length === 2 && !isNaN(parseInt(pts[0])) && !isNaN(parseInt(pts[1]))) {
+                 return { a: parseInt(pts[0]), b: parseInt(pts[1]) };
+            }
+            if (!isNaN(parseInt(val))) {
+                const num = parseInt(val);
+                return { a: num, b: (num + 1) % points.length };
+            }
+        }
+        if (typeof val === 'number') {
+            return { a: val, b: (val + 1) % points.length };
+        }
+        return null;
+    };
+
+    const entry = parseIndex(entryEdgeIndex);
+    const exit = parseIndex(exitEdgeIndex);
+
+    if (entry && exit && entry.a !== exit.a) {
+        const p1In = points[entry.a];
+        const p1Out = points[entry.b];
         const entryMid = turf.midpoint(turf.point([p1In.lng, p1In.lat]), turf.point([p1Out.lng, p1Out.lat])).geometry.coordinates;
 
-        const p2In = points[exitEdgeIndex];
-        const p2Out = points[(exitEdgeIndex+1) % points.length];
+        const p2In = points[exit.a];
+        const p2Out = points[exit.b];
         const exitMid = turf.midpoint(turf.point([p2In.lng, p2In.lat]), turf.point([p2Out.lng, p2Out.lat])).geometry.coordinates;
         
         edgeMidpoint = entryMid; // use entry point for Y-center
@@ -430,9 +451,9 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
         // A bearing of 90 is East. We want rotated bearing to be 90 or -90.
         // rotationAngle = 90 - lineBearing -> line becomes 90.
         rotationAngle = 90 - lineBearing;
-    } else if (entryEdgeIndex >= 0 && entryEdgeIndex < points.length) {
-        const p1 = points[entryEdgeIndex];
-        const p2 = points[(entryEdgeIndex+1) % points.length];
+    } else if (entry) {
+        const p1 = points[entry.a];
+        const p2 = points[entry.b];
         const angle = turf.bearing([p1.lng, p1.lat], [p2.lng, p2.lat]);
         
         if (layoutType === 'no_road_split_2') {
@@ -641,9 +662,10 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
         let topRoadY = centerY + (maxY - minY) / 6;
         let botRoadY = centerY - (maxY - minY) / 6;
 
-        if (secondEntryEdgeIndex >= 0 && secondEntryEdgeIndex < points.length) {
-            const p2In = points[secondEntryEdgeIndex];
-            const p2Out = points[(secondEntryEdgeIndex+1) % points.length];
+        const secondEntry = parseIndex(secondEntryEdgeIndex);
+        if (secondEntry) {
+            const p2In = points[secondEntry.a];
+            const p2Out = points[secondEntry.b];
             const secondMidpoint = turf.midpoint(
                 turf.point([p2In.lng, p2In.lat]), 
                 turf.point([p2Out.lng, p2Out.lat])
@@ -771,9 +793,9 @@ export default function App() {
       minArea: 100, 
       minFront: 5, 
       roadWidth: 5, 
-      entryEdgeIndex: -1, 
-      exitEdgeIndex: -1, 
-      secondEntryEdgeIndex: -1,
+      entryEdgeIndex: "-1", 
+      exitEdgeIndex: "-1", 
+      secondEntryEdgeIndex: "-1",
       layoutType: 'single_center',
       enableCulDeSac: false,
       cornerChamfer: false,
@@ -2773,36 +2795,40 @@ const CustomZoomControl = () => {
                                             <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Sisi Jalan Masuk</label>
                                             <select 
                                                 value={kavlingSettings.entryEdgeIndex}
-                                                onChange={(e) => setKavlingSettings(prev => ({...prev, entryEdgeIndex: Number(e.target.value)}))}
+                                                onChange={(e) => setKavlingSettings(prev => ({...prev, entryEdgeIndex: e.target.value}))}
                                                 className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
                                             >
-                                                <option value={-1}>Otomatis (Sisi Terpanjang)</option>
-                                                {points.map((p, i) => {
-                                                    const nextI = (i + 1) % points.length;
-                                                    return (
-                                                        <option key={i} value={i}>
-                                                            Dari P{i+1} ke P{nextI+1}
-                                                        </option>
-                                                    );
-                                                })}
+                                                <option value="-1">Otomatis (Sisi Terpanjang)</option>
+                                                {points.map((p1, i) => 
+                                                    points.map((p2, j) => {
+                                                        if (i === j) return null;
+                                                        return (
+                                                            <option key={`${i}-${j}`} value={`${i},${j}`}>
+                                                                Dari P{i+1} ke P{j+1}
+                                                            </option>
+                                                        );
+                                                    })
+                                                )}
                                             </select>
                                         </div>
                                         <div>
                                             <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Sisi Jalan Keluar (Tembus)</label>
                                             <select 
                                                 value={kavlingSettings.exitEdgeIndex}
-                                                onChange={(e) => setKavlingSettings(prev => ({...prev, exitEdgeIndex: Number(e.target.value)}))}
+                                                onChange={(e) => setKavlingSettings(prev => ({...prev, exitEdgeIndex: e.target.value}))}
                                                 className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
                                             >
-                                                <option value={-1}>Otomatis / Buntu</option>
-                                                {points.map((p, i) => {
-                                                    const nextI = (i + 1) % points.length;
-                                                    return (
-                                                        <option key={i} value={i}>
-                                                            Tembus P{i+1} ke P{nextI+1}
-                                                        </option>
-                                                    );
-                                                })}
+                                                <option value="-1">Otomatis / Buntu</option>
+                                                {points.map((p1, i) => 
+                                                    points.map((p2, j) => {
+                                                        if (i === j) return null;
+                                                        return (
+                                                            <option key={`${i}-${j}`} value={`${i},${j}`}>
+                                                                Dari P{i+1} ke P{j+1}
+                                                            </option>
+                                                        );
+                                                    })
+                                                )}
                                             </select>
                                         </div>
                                         {kavlingSettings.layoutType === 'double_parallel' && (
@@ -2810,18 +2836,20 @@ const CustomZoomControl = () => {
                                                 <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Titik Sisi Jalan Kedua</label>
                                                 <select 
                                                     value={kavlingSettings.secondEntryEdgeIndex}
-                                                    onChange={(e) => setKavlingSettings(prev => ({...prev, secondEntryEdgeIndex: Number(e.target.value)}))}
+                                                    onChange={(e) => setKavlingSettings(prev => ({...prev, secondEntryEdgeIndex: e.target.value}))}
                                                     className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
                                                 >
-                                                    <option value={-1}>Otomatis Pararel</option>
-                                                    {points.map((p, i) => {
-                                                        const nextI = (i + 1) % points.length;
-                                                        return (
-                                                            <option key={i} value={i}>
-                                                                Dari P{i+1} ke P{nextI+1}
-                                                            </option>
-                                                        );
-                                                    })}
+                                                    <option value="-1">Otomatis Pararel</option>
+                                                    {points.map((p1, i) => 
+                                                        points.map((p2, j) => {
+                                                            if (i === j) return null;
+                                                            return (
+                                                                <option key={`${i}-${j}`} value={`${i},${j}`}>
+                                                                    Dari P{i+1} ke P{j+1}
+                                                                </option>
+                                                            );
+                                                        })
+                                                    )}
                                                 </select>
                                             </div>
                                         )}
@@ -2836,18 +2864,20 @@ const CustomZoomControl = () => {
                                             </label>
                                             <select 
                                                 value={kavlingSettings.entryEdgeIndex}
-                                                onChange={(e) => setKavlingSettings(prev => ({...prev, entryEdgeIndex: Number(e.target.value)}))}
+                                                onChange={(e) => setKavlingSettings(prev => ({...prev, entryEdgeIndex: e.target.value}))}
                                                 className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
                                             >
-                                                <option value={-1}>Otomatis (Sisi Terpanjang)</option>
-                                                {points.map((p, i) => {
-                                                    const nextI = (i + 1) % points.length;
-                                                    return (
-                                                        <option key={i} value={i}>
-                                                            Pemotongan P{i+1} &gt; P{nextI+1}
-                                                        </option>
-                                                    );
-                                                })}
+                                                <option value="-1">Otomatis (Sisi Terpanjang)</option>
+                                                {points.map((p1, i) => 
+                                                    points.map((p2, j) => {
+                                                        if (i === j) return null;
+                                                        return (
+                                                            <option key={`${i}-${j}`} value={`${i},${j}`}>
+                                                                Dari P{i+1} ke P{j+1}
+                                                            </option>
+                                                        );
+                                                    })
+                                                )}
                                             </select>
                                         </div>
                                         <div>
@@ -2856,18 +2886,20 @@ const CustomZoomControl = () => {
                                             </label>
                                             <select 
                                                 value={kavlingSettings.exitEdgeIndex}
-                                                onChange={(e) => setKavlingSettings(prev => ({...prev, exitEdgeIndex: Number(e.target.value)}))}
+                                                onChange={(e) => setKavlingSettings(prev => ({...prev, exitEdgeIndex: e.target.value}))}
                                                 className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
                                             >
-                                                <option value={-1}>Otomatis / Lurus</option>
-                                                {points.map((p, i) => {
-                                                    const nextI = (i + 1) % points.length;
-                                                    return (
-                                                        <option key={i} value={i}>
-                                                            Tembus P{i+1} &gt; P{nextI+1}
-                                                        </option>
-                                                    );
-                                                })}
+                                                <option value="-1">Otomatis / Lurus</option>
+                                                {points.map((p1, i) => 
+                                                    points.map((p2, j) => {
+                                                        if (i === j) return null;
+                                                        return (
+                                                            <option key={`${i}-${j}`} value={`${i},${j}`}>
+                                                                Dari P{i+1} ke P{j+1}
+                                                            </option>
+                                                        );
+                                                    })
+                                                )}
                                             </select>
                                         </div>
                                     </>
