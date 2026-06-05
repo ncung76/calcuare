@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, startTransition } from 'react';
 import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup, GeoJSON } from 'react-leaflet';
 import * as turf from '@turf/turf';
-import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X } from 'lucide-react';
+import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X, Lock, Unlock } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import L from 'leaflet';
 import proj4 from 'proj4';
@@ -385,12 +385,13 @@ function calculateStats(points: {lat: number, lng: number}[]) {
   }
 }
 
-function subdividePolygon(points: any[], roadWidth: number, minArea: number, minFront: number, entryEdgeIndex: string = "-1", exitEdgeIndex: string = "-1", layoutType: string = 'single_center', enableCulDeSac: boolean = false, cornerChamfer: boolean = false, maxDepth: number = 30, setbackGSB: number = 0, optMode: string = 'maximize', secondEntryEdgeIndex: string = "-1") {
+function subdividePolygon(points: any[], roadWidth: number, minArea: number, minFront: number, entryEdgeIndex: string = "-1", exitEdgeIndex: string = "-1", layoutType: string = 'single_center', enableCulDeSac: boolean = false, cornerChamfer: boolean = false, maxDepth: number = 30, setbackGSB: number = 0, optMode: string = 'maximize', secondEntryEdgeIndex: string = "-1", targetAreas: Record<string, number> = {}) {
   try {
     if (points.length < 3) return [];
     
     const coords = points.map(p => [p.lng, p.lat]);
     coords.push([...coords[0]]);
+
     const poly = turf.polygon([coords]);
     const centroid = turf.centroid(poly);
     
@@ -546,18 +547,27 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
         if (!fullBlock) return;
         const blockArea = turf.area(fullBlock);
         
-        const numLots = Math.max(1, Math.floor(blockArea / minArea));
-        if (numLots === 0) return;
-        let targetArea = blockArea / numLots;
-        
+        let numLots = Math.max(1, Math.floor(blockArea / minArea));
+        if (targetAreas && targetAreas[`${prefix}-numLots`]) {
+            numLots = targetAreas[`${prefix}-numLots`];
+        }
+
+        let defaultTargetArea = blockArea / numLots;
         if (optMode === 'maximize') {
-            targetArea = minArea;
+            defaultTargetArea = minArea;
         }
         
         let startX = boundMinX - 0.0001; // start slightly before to cover edge
         let count = 0;
         
         for (let i = 0; i < numLots; i++) {
+            const key = `${prefix}-${i}`;
+            let targetArea = defaultTargetArea;
+            if (targetAreas && targetAreas[key] !== undefined) {
+                 targetArea = targetAreas[key];
+            }
+            targetArea = Math.max(1, targetArea);
+            
             let endX = boundMaxX + 0.0001;
             
             if (i < numLots - 1) {
@@ -787,6 +797,9 @@ export default function App() {
   const [exportNotes, setExportNotes] = useState("");
   const [pricePerUnit, setPricePerUnit] = useState<number>(0);
   const [njopEstimate, setNjopEstimate] = useState<string>('');
+  
+  const [exportMode, setExportMode] = useState<'current' | 'batch'>('current');
+  const [batchSelectedIds, setBatchSelectedIds] = useState<string[]>([]);
 
   // Kavling State
   const [kavlingSettings, setKavlingSettings] = useState({ 
@@ -805,6 +818,7 @@ export default function App() {
   });
   const [kavlings, setKavlings] = useState<any[]>([]);
   const [showKavlings, setShowKavlings] = useState(true);
+  const [kavlingOverrides, setKavlingOverrides] = useState<Record<string, number>>({});
 
   // New Feature States
   const [markers, setMarkers] = useState<{lat: number, lng: number, label: string}[]>([]);
@@ -813,6 +827,15 @@ export default function App() {
   const [elevationStats, setElevationStats] = useState<{min: number, max: number, diff: number} | null>(null);
   const [isFetchingElevation, setIsFetchingElevation] = useState(false);
   const [showElevation, setShowElevation] = useState(false);
+  
+  const [slopeGridData, setSlopeGridData] = useState<any[]>([]);
+  const [isFetchingSlope, setIsFetchingSlope] = useState(false);
+  const [showSlopeHeatmap, setShowSlopeHeatmap] = useState(false);
+
+  // ITR State
+  const [itrData, setItrData] = useState<any | null>(null);
+  const [isFetchingItr, setIsFetchingItr] = useState(false);
+
 
   // Search State
   const [mapCenter, setMapCenter] = useState<[number, number] | null>([-8.6705, 115.2126]);
@@ -1331,7 +1354,9 @@ export default function App() {
   }, [points, isDrawing, isEditMode]);
 
   // Nav Handlers
-  const handleGenerateKavling = () => {
+  const handleGenerateKavling = (closeModal: boolean = false, overrideAreas: Record<string, number> | null = null) => {
+      const areasToPass = overrideAreas !== null ? overrideAreas : (Object.keys(kavlingOverrides).length > 0 ? kavlingOverrides : {});
+      
       const k = subdividePolygon(
           points, 
           kavlingSettings.roadWidth, 
@@ -1345,11 +1370,184 @@ export default function App() {
           kavlingSettings.maxDepth,
           kavlingSettings.setbackGSB,
           kavlingSettings.optMode,
-          kavlingSettings.secondEntryEdgeIndex
+          kavlingSettings.secondEntryEdgeIndex,
+          areasToPass
       );
       setKavlings(k);
       setShowKavlings(true);
-      setActiveModal('none');
+      
+      if (overrideAreas === null && Object.keys(kavlingOverrides).length === 0) {
+         const newAreas: Record<string, number> = {};
+         const numLotsMap: Record<string, number> = {};
+         k.forEach(lot => {
+             if (lot.type !== 'road') {
+                 newAreas[lot.id] = lot.area;
+                 const prefix = lot.id.split('-')[0];
+                 numLotsMap[prefix] = (numLotsMap[prefix] || 0) + 1;
+             }
+         });
+         Object.keys(numLotsMap).forEach(prefix => {
+             newAreas[`${prefix}-numLots`] = numLotsMap[prefix];
+         });
+         setKavlingOverrides(newAreas);
+      }
+      
+      if (closeModal && activeModal === 'kavling') setActiveModal('none');
+  };
+
+  const handleAreaChange = (id: string, newArea: number) => {
+      if (kavlings.length === 0) return;
+      const prefix = id.split('-')[0];
+      const index = parseInt(id.split('-')[1]);
+      
+      const nextAreas = { ...kavlingOverrides };
+      const oldArea = nextAreas[id] || 0;
+      const diff = newArea - oldArea;
+      
+      nextAreas[id] = newArea;
+      
+      let siblingId = `${prefix}-${index + 1}`;
+      if (nextAreas[siblingId] === undefined) {
+          siblingId = `${prefix}-${index - 1}`;
+      }
+      
+      if (nextAreas[siblingId] !== undefined) {
+          nextAreas[siblingId] = Math.max(1, nextAreas[siblingId] - diff);
+      }
+      
+      setKavlingOverrides(nextAreas);
+      handleGenerateKavling(false, nextAreas);
+  };
+
+  const handleFetchITR = async () => {
+    if (points.length === 0) return;
+    setIsFetchingItr(true);
+    setItrData(null);
+    try {
+        let pLat = points[0].lat;
+        let pLng = points[0].lng;
+
+        if (points.length >= 3) {
+            const polyPoints = [...points.map(p => [p.lng, p.lat]), [points[0].lng, points[0].lat]];
+            const poly = turf.polygon([polyPoints]);
+            const centroid = turf.centroid(poly);
+            pLng = centroid.geometry.coordinates[0];
+            pLat = centroid.geometry.coordinates[1];
+        }
+
+        const res = await fetch(`/api/itr?lat=${pLat}&lng=${pLng}`);
+        if (!res.ok) throw new Error("Terjadi kesalahan koneksi ke server ITR");
+        const data = await res.json();
+        setItrData(data);
+    } catch (err: any) {
+        alert("Gagal mengambil data ITR: " + err.message);
+    } finally {
+        setIsFetchingItr(false);
+    }
+  };
+
+  const handleGenerateSlopeHeatmap = async () => {
+    if (points.length < 3) return;
+    setIsFetchingSlope(true);
+    setSlopeGridData([]);
+    
+    try {
+        const coords = points.map(p => [p.lng, p.lat]);
+        coords.push([...coords[0]]); // close ring
+        const poly = turf.polygon([coords]);
+        const bbox = turf.bbox(poly);
+        
+        // Let's use 8x8 grid to keep points below 100
+        const cols = 8;
+        const rows = 8;
+        const dx = (bbox[2] - bbox[0]) / cols;
+        const dy = (bbox[3] - bbox[1]) / rows;
+        
+        const lats: number[] = [];
+        const lngs: number[] = [];
+        const gridCells: any[] = [];
+        
+        for (let j = 0; j < rows; j++) {
+            for (let i = 0; i < cols; i++) {
+                const minX = bbox[0] + i * dx;
+                const maxX = minX + dx;
+                const minY = bbox[1] + j * dy;
+                const maxY = minY + dy;
+                
+                const cellPoly = turf.polygon([[[minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY], [minX, minY]]]);
+                const intersect = turf.intersect(turf.featureCollection([cellPoly, poly]));
+                
+                if (intersect) {
+                    const center = turf.center(intersect);
+                    const centerLat = center.geometry.coordinates[1];
+                    const centerLng = center.geometry.coordinates[0];
+                    lats.push(centerLat);
+                    lngs.push(centerLng);
+                    gridCells.push({
+                        poly: intersect, // Keep intersection for rendering precise heatmap
+                        i, j,
+                        lat: centerLat,
+                        lng: centerLng,
+                        elevation: 0,
+                        slope: 0
+                    });
+                }
+            }
+        }
+
+        if (lats.length === 0) throw new Error("No grid cells generated");
+        // Open-Meteo accepts up to 100 points
+        if (lats.length > 100) {
+            // Failsafe trimming
+            lats.splice(100);
+            lngs.splice(100);
+            gridCells.splice(100);
+        }
+
+        const url = `https://api.open-meteo.com/v1/elevation?latitude=${lats.join(',')}&longitude=${lngs.join(',')}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Elevation API error");
+        const data = await res.json();
+        
+        if (data && data.elevation) {
+            gridCells.forEach((cell, idx) => {
+                cell.elevation = data.elevation[idx];
+            });
+            
+            const p1 = turf.point([bbox[0], bbox[1]]);
+            const p2 = turf.point([bbox[0] + dx, bbox[1]]);
+            const distanceX = turf.distance(p1, p2) * 1000; // meters
+            
+            const p3 = turf.point([bbox[0], bbox[1] + dy]);
+            const distanceY = turf.distance(p1, p3) * 1000;
+            
+            gridCells.forEach(cell => {
+                const rightCell = gridCells.find(c => c.i === cell.i + 1 && c.j === cell.j);
+                const topCell = gridCells.find(c => c.i === cell.i && c.j === cell.j + 1);
+                
+                let dzdx = 0;
+                let dzdy = 0;
+                
+                if (rightCell) {
+                    dzdx = (rightCell.elevation - cell.elevation) / distanceX;
+                }
+                if (topCell) {
+                    dzdy = (topCell.elevation - cell.elevation) / distanceY;
+                }
+                
+                cell.slope = Math.sqrt(dzdx*dzdx + dzdy*dzdy) * 100;
+            });
+            
+            setSlopeGridData(gridCells);
+            setShowSlopeHeatmap(true);
+        }
+    } catch (err) {
+        console.error("Slope generation failed:", err);
+        setSlopeGridData([]);
+        setShowSlopeHeatmap(false);
+    } finally {
+        setIsFetchingSlope(false);
+    }
   };
 
   const handleExport = async () => {
@@ -1821,6 +2019,162 @@ export default function App() {
     }
   };
 
+  const handleBatchExportPDF = async () => {
+    if (batchSelectedIds.length === 0) return;
+    setIsExporting(true);
+
+    try {
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = pdf.internal.pageSize.getHeight();
+        const margin = 15;
+
+        // Format datetime once
+        const readableDate = new Intl.DateTimeFormat(lang === 'id' ? 'id-ID' : 'en-US', {
+            day: 'numeric', month: 'long', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        }).format(new Date());
+
+        const selectedProjects = savedProjects.filter(p => batchSelectedIds.includes(p.id));
+
+        for (let idx = 0; idx < selectedProjects.length; idx++) {
+            const proj = selectedProjects[idx];
+            if (idx > 0) pdf.addPage();
+
+            const projectRef = `Batch-${proj.id.slice(-6)}`;
+
+            const drawHeader = (pageNum: number) => {
+                pdf.setFont("helvetica", "bold");
+                pdf.setFontSize(22);
+                pdf.setTextColor(26, 26, 26);
+                pdf.text("Calcuare Surveyor Report", margin, 22);
+                
+                pdf.setLineWidth(0.5);
+                pdf.setDrawColor(200, 200, 200);
+                pdf.line(margin, 26, pdfWidth - margin, 26);
+                
+                pdf.setFont("helvetica", "normal");
+                pdf.setFontSize(9);
+                pdf.setTextColor(100);
+                pdf.text(`Generated: ${readableDate}`, margin, 32);
+                pdf.text(`Project Ref: ${projectRef}`, pdfWidth - margin, 32, { align: "right" });
+                pdf.text(`Page ${pageNum}`, pdfWidth / 2, pdfHeight - 10, { align: "center" });
+            };
+
+            const drawFooter = () => {
+                pdf.setFont("helvetica", "normal");
+                pdf.setFontSize(8);
+                pdf.setTextColor(150);
+                pdf.text(`Prepared by ${exportSurveyor || "Rifky Rangga"}`, margin, pdfHeight - 10);
+            };
+
+            drawHeader(1);
+            
+            let summaryY = 42;
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(11);
+            pdf.setTextColor(26, 26, 26);
+            pdf.text("Project Summary", margin, summaryY);
+            
+            summaryY += 6;
+            pdf.setFontSize(9);
+            
+            const drawGridRow = (label: string, val: string, yPos: number) => {
+                pdf.setFont("helvetica", "bold");
+                pdf.setTextColor(100, 100, 100);
+                pdf.text(label, margin, yPos);
+                pdf.setFont("helvetica", "normal");
+                pdf.setTextColor(30, 30, 30);
+                
+                const splitVal = pdf.splitTextToSize(val, pdfWidth - margin - 50);
+                pdf.text(splitVal, margin + 40, yPos);
+                return splitVal.length * 4.5;
+            };
+            
+            summaryY += drawGridRow("Project Name:", proj.name || "-", summaryY);
+            summaryY += drawGridRow("Client / Owner:", exportClientName || "-", summaryY);
+            if (exportNIB) summaryY += drawGridRow("NIB / Cert:", exportNIB, summaryY);
+            if (exportNotes) summaryY += drawGridRow("Field Notes:", exportNotes, summaryY);
+            
+            summaryY += 4;
+            
+            const sketchY = summaryY + 8;
+            const boxWidth = pdfWidth - (margin * 2);
+            const boxHeight = pdfHeight - sketchY - 25; 
+            
+            // Draw border 
+            pdf.setDrawColor(200, 200, 200);
+            pdf.setLineWidth(0.3);
+            pdf.rect(margin, sketchY, boxWidth, boxHeight);
+            
+            pdf.setFontSize(10);
+            pdf.setTextColor(150);
+            pdf.text("SKETSA AREA (TIDAK BERSKALA TEPAT)", margin + 5, sketchY + 8);
+            
+            const pPoints = proj.points || [];
+            if (pPoints.length > 1) {
+                const lats = pPoints.map((p: any) => p.lat);
+                const lngs = pPoints.map((p: any) => p.lng);
+                const minLat = Math.min(...lats);
+                const maxLat = Math.max(...lats);
+                const minLng = Math.min(...lngs);
+                const maxLng = Math.max(...lngs);
+                
+                const latDiff = maxLat - minLat || 0.00001;
+                const lngDiff = maxLng - minLng || 0.00001;
+                
+                const pad = 20;
+                const drawBoxW = boxWidth - 2*pad;
+                const drawBoxH = boxHeight - 2*pad;
+                
+                const meterPerLat = 111320;
+                const meterPerLng = 40075000 * Math.cos((minLat + maxLat) / 2 * Math.PI / 180) / 360;
+                
+                const realWidthMeters = lngDiff * meterPerLng;
+                const realHeightMeters = latDiff * meterPerLat;
+                
+                const scaleX = drawBoxW / realWidthMeters;
+                const scaleY = drawBoxH / realHeightMeters;
+                const scale = Math.min(scaleX, scaleY); 
+                
+                const scaledW = realWidthMeters * scale;
+                const scaledH = realHeightMeters * scale;
+                
+                const cx = margin + pad + (drawBoxW - scaledW) / 2;
+                const cy = sketchY + pad + (drawBoxH - scaledH) / 2;
+                
+                const getX = (lng: number) => cx + ((lng - minLng) * meterPerLng * scale);
+                const getY = (lat: number) => cy + scaledH - ((lat - minLat) * meterPerLat * scale); 
+                
+                pdf.setDrawColor(0, 102, 204);
+                pdf.setLineWidth(0.6);
+                for (let i = 0; i < pPoints.length; i++) {
+                    const p1 = pPoints[i];
+                    if (i === pPoints.length - 1 && pPoints.length > 2) {
+                        const p2 = pPoints[0];
+                        pdf.line(getX(p1.lng), getY(p1.lat), getX(p2.lng), getY(p2.lat));
+                    } else if (i < pPoints.length - 1) {
+                        const p2 = pPoints[i+1];
+                        pdf.line(getX(p1.lng), getY(p1.lat), getX(p2.lng), getY(p2.lat));
+                    }
+                }
+                
+                pdf.setFontSize(8);
+                const statText = `Area: ${proj.areaSqMeters.toFixed(2)} m2 | Perimeter: ${proj.perimeter.toFixed(2)} m`;
+                pdf.text(statText, margin + boxWidth / 2, sketchY + boxHeight - 5, { align: "center" });
+            }
+            drawFooter();
+        }
+
+        pdf.save(`Batch_Report_GEO-${Date.now().toString().slice(-6)}.pdf`);
+    } catch (e) {
+        console.error(e);
+        alert("Failed to generate batch export");
+    } finally {
+        setIsExporting(false);
+    }
+  };
+
   const handleExportGeoJSON = () => {
     if (points.length < 3) return;
     
@@ -1872,6 +2226,14 @@ export default function App() {
          csvContent += "Label,Type,Area(m2)\n";
          kavlings.forEach(k => {
              csvContent += `${k.label || k.id},${k.type},${k.area ? Math.round(k.area) : 0}\n`;
+         });
+     }
+
+     if (slopeGridData && slopeGridData.length > 0) {
+         csvContent += "\n\n--- SLOPE DATA ---\n";
+         csvContent += "GridX,GridY,Latitude,Longitude,Elevation(m),Slope(%)\n";
+         slopeGridData.forEach(cell => {
+             csvContent += `${cell.i},${cell.j},${cell.lat.toFixed(6)},${cell.lng.toFixed(6)},${cell.elevation ? cell.elevation.toFixed(2) : 0},${cell.slope ? cell.slope.toFixed(2) : 0}\n`;
          });
      }
 
@@ -2473,7 +2835,6 @@ const CustomZoomControl = () => {
   return (
     <div className="flex flex-col h-[100dvh] w-full bg-[var(--color-bg)] font-sans text-[var(--color-fg)] overflow-hidden">
       
-      {/* Modals Overlay */}
       {activeModal !== 'none' && (
         <div className="fixed inset-0 bg-[var(--color-bg)]/80 backdrop-blur-sm z-[3000] flex items-center justify-center p-4">
             <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] lg:max-h-[85vh]">
@@ -2998,14 +3359,48 @@ const CustomZoomControl = () => {
                                 </p>
                             </div>
 
-                            <button onClick={handleGenerateKavling} className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-4 text-[12px] uppercase tracking-widest font-bold mt-4 shadow-lg hover:opacity-90">
-                                Eksekusi Kavling
+                            <button onClick={() => handleGenerateKavling(false)} className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-4 text-[12px] uppercase tracking-widest font-bold mt-4 shadow-lg hover:opacity-90">
+                                {kavlings.length > 0 ? "Kalkulasi Ulang" : "Preview & Kalkulasi"}
                             </button>
                             
                             {kavlings.length > 0 && (
-                                <button onClick={() => { setKavlings([]); setActiveModal('none'); }} className="w-full border-2 border-[var(--color-fg)]/20 text-[var(--color-fg)] py-3 text-[12px] uppercase tracking-widest font-bold mt-2 hover:bg-[var(--color-fg)]/5">
-                                    Hapus Garis Kavling
-                                </button>
+                                <div className="mt-4 pt-4 border-t border-[var(--color-fg)]/10 space-y-3">
+                                    <div className="flex justify-between items-center">
+                                        <h4 className="text-[12px] uppercase tracking-widest font-bold opacity-80">Daftar Kavling</h4>
+                                        <span className="text-[9px] opacity-60 font-mono text-right max-w-[150px] leading-tight">Ubah angka untuk menggeser garis batas</span>
+                                    </div>
+                                    <div className="max-h-[300px] overflow-y-auto space-y-2 pr-2">
+                                        {kavlings.filter((k: any) => k.type !== 'road').map((k: any) => (
+                                            <div key={k.id} className={`flex items-center justify-between p-2 border rounded border-[var(--color-fg)]/20 bg-[var(--color-fg)]/5`}>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-[12px] opacity-80 font-mono w-12 truncate">{k.label || k.id}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <input 
+                                                        type="number" 
+                                                        className={`w-20 p-1 text-right text-[12px] border rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)] border-transparent`}
+                                                        value={Math.round(kavlingOverrides[k.id] || k.area).toString()}
+                                                        onChange={(e) => {
+                                                            const val = parseFloat(e.target.value);
+                                                            if (!isNaN(val) && val > 0) {
+                                                                handleAreaChange(k.id, val);
+                                                            }
+                                                        }}
+                                                    />
+                                                    <span className="text-[10px] opacity-50">m²</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex gap-2 mt-4">
+                                        <button onClick={() => setActiveModal('none')} className="w-1/2 border border-[var(--color-fg)] flex justify-center py-3 text-[12px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-colors">
+                                            Selesai (Tutup)
+                                        </button>
+                                        <button onClick={() => { setKavlings([]); setKavlingOverrides({}); }} className="w-1/2 border border-red-500/20 text-red-500 flex justify-center py-3 text-[12px] uppercase tracking-widest font-bold hover:bg-red-500/10 transition-colors">
+                                            Hapus Semua
+                                        </button>
+                                    </div>
+                                </div>
                             )}
                         </div>
                     )}
@@ -3013,71 +3408,146 @@ const CustomZoomControl = () => {
                     {/* Export Modal */}
                     {activeModal === 'export' && (
                         <div className="space-y-4">
-                            <p className="text-[15px] opacity-80 mb-4">{t(lang, 'exportDesc')}</p>
-                            
-                            <div className="bg-[var(--color-fg)]/5 p-4 border-l-2 border-[var(--color-fg)] font-mono text-[12px] space-y-2">
-                                <div><strong>{t(lang, 'pointsToProcess')}</strong> {points.length}</div>
-                                <div><strong>{t(lang, 'calculatedArea')}</strong> {
-                                    areaUnit === 'are' ? stats.areaAre.toFixed(arePrecision) + ' are' :
-                                    areaUnit === 'ha' ? stats.areaHectares.toFixed(areaPrecision) + ' ha' :
-                                    stats.areaSqMeters.toFixed(areaPrecision) + ' m²'
-                                }</div>
-                                <div><strong>{t(lang, 'estimatedPerimeter')}</strong> {stats.perimeter.toFixed(2)} m</div>
-                            </div>
-                            
-                            <div className="space-y-3 mt-4 pt-4 border-t border-[var(--color-fg)]/10">
-                                <h4 className="text-[12px] uppercase tracking-widest font-bold opacity-70">Project Details (Optional)</h4>
-                                <input
-                                    type="text"
-                                    placeholder="Client Name"
-                                    value={exportClientName}
-                                    onChange={(e) => setExportClientName(e.target.value)}
-                                    className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
-                                />
-                                <input
-                                    type="text"
-                                    placeholder="NIB / Certificate Number"
-                                    value={exportNIB}
-                                    onChange={(e) => setExportNIB(e.target.value)}
-                                    className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
-                                />
-                                <input
-                                    type="text"
-                                    placeholder="Surveyor Name"
-                                    value={exportSurveyor}
-                                    onChange={(e) => setExportSurveyor(e.target.value)}
-                                    className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
-                                />
-                                <input
-                                    type="number"
-                                    placeholder={`Price per ${areaUnit === 'are' ? 'Are' : areaUnit === 'ha' ? 'Hectare' : 'm²'} (Rp)`}
-                                    value={pricePerUnit || ''}
-                                    onChange={(e) => setPricePerUnit(Number(e.target.value))}
-                                    className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
-                                />
-                                <textarea
-                                    placeholder="Field Notes"
-                                    value={exportNotes}
-                                    onChange={(e) => setExportNotes(e.target.value)}
-                                    className="w-full h-20 p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)] resize-none"
-                                />
+                            <div className="flex gap-4 border-b border-[var(--color-fg)]/10 pb-4 mb-4">
+                                <button 
+                                    onClick={() => setExportMode('current')}
+                                    className={`flex-1 pb-2 text-[12px] uppercase font-bold tracking-widest border-b-2 transition-all ${exportMode === 'current' ? 'border-[var(--color-fg)] opacity-100' : 'border-transparent opacity-40 hover:opacity-100'}`}
+                                >
+                                    Current Project
+                                </button>
+                                <button 
+                                    onClick={() => setExportMode('batch')}
+                                    className={`flex-1 pb-2 text-[12px] uppercase font-bold tracking-widest border-b-2 transition-all ${exportMode === 'batch' ? 'border-[var(--color-fg)] opacity-100' : 'border-transparent opacity-40 hover:opacity-100'}`}
+                                >
+                                    Batch Export
+                                </button>
                             </div>
 
-                            <button onClick={handleExport} disabled={isExporting} className="w-full bg-[var(--color-fg)] text-white py-3 text-[12px] uppercase tracking-widest font-bold mt-4 disabled:opacity-50 flex justify-center items-center gap-2 transition-all">
-                                {isExporting ? t(lang, 'generating') : <><Download size={14} /> {t(lang, 'exportPdfBtn')}</>}
-                            </button>
+                            {exportMode === 'current' ? (
+                                <>
+                                    <p className="text-[15px] opacity-80 mb-4">{t(lang, 'exportDesc')}</p>
+                                    
+                                    <div className="bg-[var(--color-fg)]/5 p-4 border-l-2 border-[var(--color-fg)] font-mono text-[12px] space-y-2">
+                                        <div><strong>{t(lang, 'pointsToProcess')}</strong> {points.length}</div>
+                                        <div><strong>{t(lang, 'calculatedArea')}</strong> {
+                                            areaUnit === 'are' ? stats.areaAre.toFixed(arePrecision) + ' are' :
+                                            areaUnit === 'ha' ? stats.areaHectares.toFixed(areaPrecision) + ' ha' :
+                                            stats.areaSqMeters.toFixed(areaPrecision) + ' m²'
+                                        }</div>
+                                        <div><strong>{t(lang, 'estimatedPerimeter')}</strong> {stats.perimeter.toFixed(2)} m</div>
+                                    </div>
+                                    
+                                    <div className="space-y-3 mt-4 pt-4 border-t border-[var(--color-fg)]/10">
+                                        <h4 className="text-[12px] uppercase tracking-widest font-bold opacity-70">Project Details (Optional)</h4>
+                                        <input
+                                            type="text"
+                                            placeholder="Client Name"
+                                            value={exportClientName}
+                                            onChange={(e) => setExportClientName(e.target.value)}
+                                            className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
+                                        />
+                                        <input
+                                            type="text"
+                                            placeholder="NIB / Certificate Number"
+                                            value={exportNIB}
+                                            onChange={(e) => setExportNIB(e.target.value)}
+                                            className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
+                                        />
+                                        <input
+                                            type="text"
+                                            placeholder="Surveyor Name"
+                                            value={exportSurveyor}
+                                            onChange={(e) => setExportSurveyor(e.target.value)}
+                                            className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
+                                        />
+                                        <input
+                                            type="number"
+                                            placeholder={`Price per ${areaUnit === 'are' ? 'Are' : areaUnit === 'ha' ? 'Hectare' : 'm²'} (Rp)`}
+                                            value={pricePerUnit || ''}
+                                            onChange={(e) => setPricePerUnit(Number(e.target.value))}
+                                            className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
+                                        />
+                                        <textarea
+                                            placeholder="Field Notes"
+                                            value={exportNotes}
+                                            onChange={(e) => setExportNotes(e.target.value)}
+                                            className="w-full h-20 p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)] resize-none"
+                                        />
+                                    </div>
 
-                            <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 mt-4">
-                               <button onClick={handleExportGeoJSON} disabled={points.length < 3} className="bg-transparent border border-[var(--color-fg)]/20 text-[var(--color-fg)] py-2 text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex justify-center items-center gap-2 disabled:opacity-30">
-                                  <FileJson size={14} /> {t(lang, 'exportGeoJSON')}
-                               </button>
-                               <button onClick={handleExportCSV} disabled={points.length === 0} className="bg-transparent border border-[var(--color-fg)]/20 text-[var(--color-fg)] py-2 text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex justify-center items-center gap-2 disabled:opacity-30">
-                                  <Table size={14} /> {t(lang, 'exportCSV')}
-                               </button>
-                               <button onClick={handleExportDXF} disabled={points.length < 3} className="col-span-2 lg:col-span-1 bg-transparent border border-[var(--color-fg)]/20 text-[var(--color-fg)] py-2 text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex justify-center items-center gap-2 disabled:opacity-30">
-                                  <Layers size={14} /> Export DXF
-                               </button>
-                            </div>
+                                    <button onClick={handleExport} disabled={isExporting} className="w-full bg-[var(--color-fg)] text-white py-3 text-[12px] uppercase tracking-widest font-bold mt-4 disabled:opacity-50 flex justify-center items-center gap-2 transition-all">
+                                        {isExporting ? t(lang, 'generating') : <><Download size={14} /> {t(lang, 'exportPdfBtn')}</>}
+                                    </button>
+
+                                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 mt-4">
+                                       <button onClick={handleExportGeoJSON} disabled={points.length < 3} className="bg-transparent border border-[var(--color-fg)]/20 text-[var(--color-fg)] py-2 text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex justify-center items-center gap-2 disabled:opacity-30">
+                                          <FileJson size={14} /> {t(lang, 'exportGeoJSON')}
+                                       </button>
+                                       <button onClick={handleExportCSV} disabled={points.length === 0} className="bg-transparent border border-[var(--color-fg)]/20 text-[var(--color-fg)] py-2 text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex justify-center items-center gap-2 disabled:opacity-30">
+                                          <Table size={14} /> {t(lang, 'exportCSV')}
+                                       </button>
+                                       <button onClick={handleExportDXF} disabled={points.length < 3} className="col-span-2 lg:col-span-1 bg-transparent border border-[var(--color-fg)]/20 text-[var(--color-fg)] py-2 text-[10px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex justify-center items-center gap-2 disabled:opacity-30">
+                                          <Layers size={14} /> Export DXF
+                                       </button>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="space-y-4">
+                                    <p className="text-[13px] opacity-80 mb-2">Pilih beberapa project untuk digabung ke dalam satu laporan PDF. Halaman akan digenerate berurutan (tanpa kavling).</p>
+                                    
+                                    <div className="max-h-[300px] overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                                        {savedProjects.length === 0 ? (
+                                            <p className="text-[11px] opacity-50 italic text-center py-4">Belum ada project di library.</p>
+                                        ) : (
+                                            savedProjects.map(proj => (
+                                                <label key={proj.id} className="flex items-center gap-3 p-3 border border-[var(--color-fg)]/10 rounded hover:bg-[var(--color-fg)]/5 cursor-pointer transition-colors">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        className="w-4 h-4 cursor-pointer accent-[var(--color-fg)]"
+                                                        checked={batchSelectedIds.includes(proj.id)}
+                                                        onChange={(e) => {
+                                                            if (e.target.checked) setBatchSelectedIds(prev => [...prev, proj.id]);
+                                                            else setBatchSelectedIds(prev => prev.filter(id => id !== proj.id));
+                                                        }}
+                                                    />
+                                                    <div className="flex flex-col">
+                                                        <span className="text-[12px] font-bold">{proj.name}</span>
+                                                        <span className="text-[10px] opacity-60 font-mono">
+                                                            {new Date(proj.date).toLocaleDateString()} • {proj.points?.length || 0} Points • {proj.areaSqMeters?.toFixed(1) || 0}m²
+                                                        </span>
+                                                    </div>
+                                                </label>
+                                            ))
+                                        )}
+                                    </div>
+                                    
+                                    {savedProjects.length > 0 && (
+                                        <div className="flex gap-2">
+                                            <button 
+                                                onClick={() => setBatchSelectedIds(savedProjects.map(p => p.id))}
+                                                className="text-[10px] uppercase font-bold tracking-widest opacity-60 hover:opacity-100"
+                                            >
+                                                Pilih Semua
+                                            </button>
+                                            <span className="opacity-30">•</span>
+                                            <button 
+                                                onClick={() => setBatchSelectedIds([])}
+                                                className="text-[10px] uppercase font-bold tracking-widest opacity-60 hover:opacity-100"
+                                            >
+                                                Kosongkan
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    <button 
+                                        onClick={handleBatchExportPDF} 
+                                        disabled={isExporting || batchSelectedIds.length === 0} 
+                                        className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-3 text-[12px] uppercase tracking-widest font-bold mt-4 disabled:opacity-50 flex justify-center items-center gap-2 transition-all hover:opacity-90"
+                                    >
+                                        {isExporting ? "GENERATING BATCH..." : `START BATCH EXPORT (${batchSelectedIds.length})`}
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -3589,6 +4059,24 @@ const CustomZoomControl = () => {
                 )}
             </AnimatePresence>
 
+            {showSlopeHeatmap && slopeGridData.length > 0 && (
+                <div className="absolute bottom-6 right-6 z-[2000] bg-[var(--color-surface)]/95 backdrop-blur-md border border-[var(--color-fg)]/20 shadow-[0_10px_30px_rgba(0,0,0,0.2)] p-4 flex flex-col gap-3 text-[var(--color-fg)] pointer-events-none rounded">
+                    <h4 className="text-[10px] uppercase font-bold tracking-widest opacity-80 border-b border-[var(--color-fg)]/10 pb-2">Legenda Slope</h4>
+                    <div className="flex items-center gap-3 text-[11px] font-mono">
+                        <div className="w-4 h-4 rounded-full bg-green-500 shadow-sm" />
+                        <span>&lt; 5% (Datar)</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] font-mono">
+                        <div className="w-4 h-4 rounded-full bg-yellow-400 shadow-sm" />
+                        <span>5% - 15% (Miring)</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] font-mono">
+                        <div className="w-4 h-4 rounded-full bg-red-500 shadow-sm" />
+                        <span>&gt; 15% (Curam)</span>
+                    </div>
+                </div>
+            )}
+
             <style>{`
               .leaflet-layer.custom-wms-layer {
                  filter: hue-rotate(${wmsHue}deg) invert(${wmsInvert ? 1 : 0}) !important;
@@ -3790,6 +4278,30 @@ const CustomZoomControl = () => {
                       />
                     )}
                     
+                    {/* Slope Heatmap rendering */}
+                    {showSlopeHeatmap && slopeGridData.map((cell, idx) => {
+                        let color = '#22c55e'; // default green < 5%
+                        if (cell.slope > 15) {
+                            color = '#ef4444'; // red > 15%
+                        } else if (cell.slope >= 5) {
+                            color = '#eab308'; // yellow 5-15%
+                        }
+                        return (
+                            <GeoJSON 
+                                key={`slope-${idx}`}
+                                data={cell.poly} 
+                                style={() => ({
+                                    color: color,
+                                    weight: 0,
+                                    fillColor: color,
+                                    fillOpacity: 0.6
+                                })}
+                            >
+                                <Popup>Slope: {cell.slope.toFixed(2)}%<br/>Elev: {cell.elevation.toFixed(1)}m</Popup>
+                            </GeoJSON>
+                        );
+                    })}
+
                     {/* Kavlings rendering */}
                     {showKavlings && kavlings.map(k => {
                         return (
@@ -4186,6 +4698,103 @@ const CustomZoomControl = () => {
               ) : (
                   <div className="text-[10px] uppercase font-mono opacity-40 italic mt-2">Sedang memuat data elevasi...</div>
               )}
+            </div>
+            )}
+
+            {points.length >= 3 && (
+            <div className="border-t border-[var(--color-fg)]/10 pt-4 text-[var(--color-fg)]">
+                <label className="text-[12px] uppercase opacity-40 flex items-center mb-2 font-bold justify-between">
+                  <span>Slope Heatmap (BETA)</span>
+                </label>
+                
+                {!showSlopeHeatmap && slopeGridData.length === 0 ? (
+                    <button 
+                       onClick={handleGenerateSlopeHeatmap}
+                       disabled={isFetchingSlope}
+                       className="w-full bg-transparent border border-[var(--color-fg)]/20 py-2 text-[10px] uppercase font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                       {isFetchingSlope && <div className="w-3 h-3 border-2 border-[var(--color-fg)] border-t-transparent animate-spin rounded-full" />}
+                       {isFetchingSlope ? "Menghitung Slope..." : "Tampilkan Slope Heatmap"}
+                    </button>
+                ) : (
+                    <div className="space-y-2">
+                        <label className="flex items-center gap-2 text-[10px] uppercase font-bold cursor-pointer">
+                            <input 
+                                type="checkbox" 
+                                checked={showSlopeHeatmap}
+                                onChange={(e) => setShowSlopeHeatmap(e.target.checked)}
+                            />
+                            Tampilkan Overlay Slope di Peta
+                        </label>
+                        <div className="flex gap-2">
+                           <div className="w-1/3 text-center text-[9px]"><div className="h-2 w-full mb-1 opacity-60" style={{backgroundColor: '#22c55e'}}></div>{'< 5% (Datar)'}</div>
+                           <div className="w-1/3 text-center text-[9px]"><div className="h-2 w-full mb-1 opacity-60" style={{backgroundColor: '#eab308'}}></div>{'5-15%'}</div>
+                           <div className="w-1/3 text-center text-[9px]"><div className="h-2 w-full mb-1 opacity-60" style={{backgroundColor: '#ef4444'}}></div>{'> 15% (Curam)'}</div>
+                        </div>
+                        <button 
+                           onClick={handleGenerateSlopeHeatmap}
+                           disabled={isFetchingSlope}
+                           className="mt-2 w-full bg-transparent border border-[var(--color-fg)]/20 py-2 text-[10px] uppercase font-bold hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-all disabled:opacity-50"
+                        >
+                           Hitung Ulang Slope
+                        </button>
+                    </div>
+                )}
+            </div>
+            )}
+
+            {points.length > 0 && (
+            <div className="border-t border-[var(--color-fg)]/10 pt-4 text-[var(--color-fg)]">
+                <label className="text-[12px] uppercase opacity-40 flex items-center mb-2 font-bold justify-between">
+                  <span>Cek ITR (BPN Gistaru)</span>
+                </label>
+                {!itrData ? (
+                    <button 
+                       onClick={handleFetchITR}
+                       disabled={isFetchingItr}
+                       className="w-full bg-transparent border border-[var(--color-fg)]/20 py-2 text-[10px] uppercase font-bold hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                       {isFetchingItr && <div className="w-3 h-3 border-2 border-[var(--color-fg)] border-t-transparent animate-spin rounded-full" />}
+                       {isFetchingItr ? "Mengecek ITR..." : "Cek Tata Ruang Area Ini"}
+                    </button>
+                ) : (
+                    <div className="space-y-4">
+                        <div className="bg-[var(--color-fg)]/5 p-3 rounded-sm border border-[var(--color-fg)]/10">
+                            {itrData.note && (
+                                <div className="text-[9px] uppercase font-bold text-orange-500 mb-2">{itrData.note}</div>
+                            )}
+                            {itrData.data?.administrasi && (
+                                <div className="mb-3">
+                                    <div className="text-[10px] font-bold uppercase opacity-60 mb-1">Administrasi</div>
+                                    <div className="text-[12px]">{itrData.data.administrasi.provinsi} - {itrData.data.administrasi.kecamatan} - {itrData.data.administrasi.kelurahan}</div>
+                                </div>
+                            )}
+                            {itrData.data?.zonasi && (
+                                <div>
+                                    <div className="text-[10px] font-bold uppercase opacity-60 mb-1">Zonasi</div>
+                                    <div className="text-[12px]">
+                                        <strong>{itrData.data.zonasi.zona?.kode || "N/A"}:</strong> {itrData.data.zonasi.zona?.nama || "N/A"}
+                                    </div>
+                                    <div className="text-[12px]">
+                                        <strong>{itrData.data.zonasi.sub_zona?.kode || "N/A"}:</strong> {itrData.data.zonasi.sub_zona?.nama || "N/A"}
+                                    </div>
+                                </div>
+                            )}
+                            {!itrData.data && (
+                                <div className="text-[10px] opacity-70">
+                                    Raw Response: <br/>
+                                    <pre className="mt-1 overflow-x-auto text-[9px] p-2 bg-[var(--color-bg)] text-[var(--color-fg)] rounded">{JSON.stringify(itrData, null, 2)}</pre>
+                                </div>
+                            )}
+                        </div>
+                        <button 
+                           onClick={() => setItrData(null)}
+                           className="w-full bg-transparent border border-[var(--color-fg)]/20 py-2 text-[10px] uppercase font-bold hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-all"
+                        >
+                           Tutup Info ITR
+                        </button>
+                    </div>
+                )}
             </div>
             )}
 
