@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, startTransition } from 'react';
+import React, { useState, useEffect, useRef, useCallback, startTransition, useReducer } from 'react';
 import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup, GeoJSON } from 'react-leaflet';
 import * as turf from '@turf/turf';
 import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X, Lock, Unlock } from 'lucide-react';
@@ -32,6 +32,46 @@ export const decodeProject = (encoded: string) => {
         console.error("Failed to decode project:", e);
         return null;
     }
+};
+
+export const generateThumbnail = (pts: { lat: number, lng: number }[]): string => {
+    if (pts.length < 3) return "";
+    const canvas = document.createElement('canvas');
+    canvas.width = 100;
+    canvas.height = 100;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return "";
+
+    const lats = pts.map(p => p.lat);
+    const lngs = pts.map(p => p.lng);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+
+    const latRange = maxLat - minLat;
+    const lngRange = maxLng - minLng;
+    const padding = 10;
+    // Handle cases where range is 0 to avoid division by zero
+    const scale = Math.min((canvas.width - 2 * padding) / (lngRange || 1), (canvas.height - 2 * padding) / (latRange || 1));
+
+    ctx.fillStyle = '#f3f4f6'; // background
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+        const x = padding + (p.lng - minLng) * scale;
+        const y = canvas.height - padding - (p.lat - minLat) * scale;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = '#f97316';
+    ctx.strokeStyle = '#f97316';
+    ctx.fill();
+    ctx.stroke();
+
+    return canvas.toDataURL('image/png');
 };
 
 const hexToRgb = (hex: string) => {
@@ -832,7 +872,33 @@ export default function App() {
     localStorage.removeItem('calcare_auth_token');
   };
 
-  const [points, setPoints] = useState<{lat: number, lng: number, color: string}[]>([]);
+  const pointsReducer = (state: { history: any[][], index: number }, action: any): { history: any[][], index: number } => {
+      switch(action.type) {
+          case 'SET':
+              const currentPoints = state.history[state.index];
+              const nextPoints = typeof action.payload === 'function' ? action.payload(currentPoints) : action.payload;
+              if (JSON.stringify(currentPoints) === JSON.stringify(nextPoints)) return state;
+              
+              const newHistory = state.history.slice(0, state.index + 1);
+              newHistory.push(nextPoints);
+              if (newHistory.length > 11) newHistory.shift();
+              return { history: newHistory, index: newHistory.length - 1 };
+          case 'UNDO':
+              return { ...state, index: Math.max(0, state.index - 1) };
+          case 'REDO':
+              return { ...state, index: Math.min(state.history.length - 1, state.index + 1) };
+          default:
+              return state;
+      }
+  }
+
+  const [pointsState, dispatch] = useReducer(pointsReducer, { history: [[]], index: 0 });
+  const points = pointsState.history[pointsState.index];
+  
+  const setPoints = (newVal: any) => dispatch({ type: 'SET', payload: newVal });
+  const undo = () => dispatch({ type: 'UNDO' });
+  const redo = () => dispatch({ type: 'REDO' });
+
   const [stats, setStats] = useState(calculateStats([]));
   const [manualInput, setManualInput] = useState({ lat: '', lng: '' });
 
@@ -1032,6 +1098,7 @@ export default function App() {
   const [activeModal, setActiveModal] = useState<'none' | 'library' | 'settings' | 'export' | 'import'>('none');
   const [savedProjects, setSavedProjects] = useState<any[]>([]);
   const [newProjectName, setNewProjectName] = useState('');
+  const [projectDetails, setProjectDetails] = useState('');
   const [importText, setImportText] = useState('');
 
   // WMS Filter State
@@ -2627,7 +2694,9 @@ export default function App() {
     const newProj = { 
         id: `proj_${Date.now()}`, 
         name: newProjectName, 
+        details: projectDetails,
         points, 
+        thumbnail: generateThumbnail(points),
         date: new Date().toISOString(),
         areaSqMeters: stats.areaSqMeters,
         perimeter: stats.perimeter,
@@ -2640,6 +2709,7 @@ export default function App() {
     setSavedProjects(updated);
     localStorage.setItem('geocalc_projects', JSON.stringify(updated));
     setNewProjectName('');
+    setProjectDetails('');
     setCurrentProjectId(newProj.id);
     setActiveModal('none');
 
@@ -2695,6 +2765,7 @@ export default function App() {
     if (proj.kavlingSettings) setKavlingSettings(proj.kavlingSettings);
     setCurrentProjectId(proj.id);
     setNewProjectName(proj.name || "");
+    setProjectDetails(proj.details || "");
     localStorage.setItem('calcare_points_draft', JSON.stringify(proj.points));
     localStorage.setItem('calcare_current_id', String(proj.id));
     setActiveModal('none');
@@ -3101,18 +3172,28 @@ const CustomZoomControl = () => {
                             </button>
 
                             <div>
-                                <form onSubmit={handleSaveProject} className="flex gap-2">
-                                    <input 
-                                        type="text" 
-                                        value={newProjectName} 
-                                        onChange={e => setNewProjectName(e.target.value)} 
-                                        placeholder={t(lang, 'newProjectName')} 
-                                        className="flex-1 border border-[var(--color-fg)]/20 bg-transparent px-3 py-2 text-[13px] font-mono focus:outline-none focus:border-[var(--color-fg)]"
+                                <form onSubmit={handleSaveProject} className="flex flex-col gap-2">
+                                    <div className="flex gap-2">
+                                        <input 
+                                            type="text" 
+                                            value={newProjectName} 
+                                            onChange={e => setNewProjectName(e.target.value)} 
+                                            placeholder={t(lang, 'newProjectName')} 
+                                            className="flex-1 border border-[var(--color-fg)]/20 bg-transparent px-3 py-2 text-[13px] font-mono focus:outline-none focus:border-[var(--color-fg)]"
+                                            disabled={isSyncing}
+                                        />
+                                        <button type="submit" disabled={points.length === 0 || isSyncing} className="bg-[var(--color-fg)] text-white px-4 text-[12px] uppercase tracking-widest font-bold disabled:opacity-30">
+                                            {isSyncing ? t(lang, 'saving') : t(lang, 'save')}
+                                        </button>
+                                    </div>
+                                    <textarea
+                                        value={projectDetails}
+                                        onChange={e => setProjectDetails(e.target.value)}
+                                        placeholder="Project details (optional)"
+                                        className="w-full border border-[var(--color-fg)]/20 bg-transparent px-3 py-2 text-[13px] font-mono focus:outline-none focus:border-[var(--color-fg)]"
+                                        rows={2}
                                         disabled={isSyncing}
                                     />
-                                    <button type="submit" disabled={points.length === 0 || isSyncing} className="bg-[var(--color-fg)] text-white px-4 text-[12px] uppercase tracking-widest font-bold disabled:opacity-30">
-                                        {isSyncing ? t(lang, 'saving') : t(lang, 'save')}
-                                    </button>
                                 </form>
                                 {points.length === 0 && (
                                     <p className="text-[10px] text-red-500 mt-2 uppercase tracking-widest opacity-80">{t(lang, 'addPointsFirst')}</p>
@@ -3126,41 +3207,50 @@ const CustomZoomControl = () => {
                                 ) : (
                                     <div className="space-y-3">
                                         {savedProjects.map(proj => (
-                                            <div key={proj.id} className="border border-[var(--color-fg)]/10 p-3 flex justify-between flex-col gap-2">
-                                                <div className="flex justify-between items-start">
-                                                    <div>
-                                                        <div className="font-bold text-[15px] tracking-tight">{proj.name}</div>
-                                                        <div className="text-[12px] font-mono opacity-50">{new Date(proj.date).toLocaleDateString()} • {proj.points.length} {t(lang, 'points')}</div>
+                                            <div key={proj.id} className="border border-[var(--color-fg)]/10 p-3 flex gap-3">
+                                                {proj.thumbnail && <img src={proj.thumbnail} className="w-14 h-14 object-contain bg-[var(--color-fg)]/5 rounded border border-[var(--color-fg)]/10" />}
+                                                <div className="flex-1">
+                                                    <div className="flex justify-between items-start">
+                                                        <div>
+                                                            <div className="font-bold text-[15px] tracking-tight">{proj.name}</div>
+                                                            <div className="text-[12px] font-mono opacity-50">{new Date(proj.date).toLocaleDateString()} • {proj.points.length} {t(lang, 'points')}</div>
+                                                        </div>
+                                                        <div className="flex gap-2">
+                                                            <button 
+                                                                onClick={() => handleShareProject(proj)} 
+                                                                disabled={isSharing === proj.id}
+                                                                className={`p-1.5 border rounded transition-all flex items-center justify-center ${proj.shared ? 'bg-green-500/10 border-green-500/30 text-green-600' : 'border-[var(--color-fg)]/20 opacity-60 hover:opacity-100'}`}
+                                                                title={proj.shared ? t(lang, 'unshare') : t(lang, 'share')}
+                                                            >
+                                                                {isSharing === proj.id ? (
+                                                                  <div className="w-4 h-4 border-2 border-current border-t-transparent animate-spin rounded-full" />
+                                                                ) : shareStatus[proj.id] ? (
+                                                                  <Check size={14} />
+                                                                ) : (
+                                                                  <Share2 size={14} />
+                                                                )}
+                                                            </button>
+                                                            <button onClick={() => deleteProject(proj.id)} className="text-red-500 opacity-60 hover:opacity-100 p-1.5 border border-red-500/20 rounded">
+                                                                <Trash2 size={14} />
+                                                            </button>
+                                                        </div>
                                                     </div>
-                                                    <div className="flex gap-2">
-                                                        <button 
-                                                            onClick={() => handleShareProject(proj)} 
-                                                            disabled={isSharing === proj.id}
-                                                            className={`p-1.5 border rounded transition-all flex items-center justify-center ${proj.shared ? 'bg-green-500/10 border-green-500/30 text-green-600' : 'border-[var(--color-fg)]/20 opacity-60 hover:opacity-100'}`}
-                                                            title={proj.shared ? t(lang, 'unshare') : t(lang, 'share')}
-                                                        >
-                                                            {isSharing === proj.id ? (
-                                                              <div className="w-4 h-4 border-2 border-current border-t-transparent animate-spin rounded-full" />
-                                                            ) : shareStatus[proj.id] ? (
-                                                              <Check size={14} />
-                                                            ) : (
-                                                              <Share2 size={14} />
-                                                            )}
-                                                        </button>
-                                                        <button onClick={() => deleteProject(proj.id)} className="text-red-500 opacity-60 hover:opacity-100 p-1.5 border border-red-500/20 rounded">
-                                                            <Trash2 size={14} />
-                                                        </button>
-                                                    </div>
+                                                    {proj.shared && (
+                                                      <div 
+                                                        className="flex items-center gap-2 mt-2 px-2 py-1 bg-green-500/5 border border-green-500/10 rounded cursor-pointer hover:bg-green-500/10 transition-colors" 
+                                                        onClick={() => {
+                                                          navigator.clipboard.writeText(`${window.location.origin}/?share=${encodeURIComponent(encodeProject(proj))}`);
+                                                          alert("Link berbagi disalin!");
+                                                        }}
+                                                      >
+                                                        <Link size={10} className="text-green-600 shrink-0" />
+                                                        <span className="text-[10px] font-mono text-green-700 truncate opacity-80">
+                                                          Tautan Berbagi
+                                                        </span>
+                                                      </div>
+                                                    )}
+                                                    <button onClick={() => loadProject(proj)} className="w-full mt-2 border border-[var(--color-fg)]/20 py-2 text-[12px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-colors">{t(lang, 'loadProject')}</button>
                                                 </div>
-                                                {proj.shared && (
-                                                  <div className="flex items-center gap-2 mb-2 px-2 py-1 bg-green-500/5 border border-green-500/10 rounded">
-                                                    <Link size={10} className="text-green-600 shrink-0" />
-                                                    <span className="text-[10px] font-mono text-green-700 truncate opacity-80">
-                                                      {shareStatus[proj.id] ? t(lang, 'linkCopied') : `${window.location.origin}/?share=${proj.id}`}
-                                                    </span>
-                                                  </div>
-                                                )}
-                                                <button onClick={() => loadProject(proj)} className="w-full border border-[var(--color-fg)]/20 py-2 text-[12px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-white transition-colors">{t(lang, 'loadProject')}</button>
                                             </div>
                                         ))}
                                     </div>
@@ -3764,6 +3854,20 @@ const CustomZoomControl = () => {
         <div className="flex flex-col lg:flex-row lg:items-baseline gap-0 lg:gap-2">
           <div className="flex items-baseline gap-2">
             <span className="text-[20px] lg:text-[26px] font-serif italic font-bold tracking-tight">Calcuare</span>
+            <button 
+              onClick={undo}
+              disabled={pointsState.index === 0}
+              className="ml-2 px-2 py-1 bg-[var(--color-fg)]/10 text-[var(--color-fg)] rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity"
+            >
+              UNDO
+            </button>
+            <button 
+              onClick={redo}
+              disabled={pointsState.index === pointsState.history.length - 1}
+              className="px-2 py-1 bg-[var(--color-fg)]/10 text-[var(--color-fg)] rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity"
+            >
+              REDO
+            </button>
             <button 
               onClick={() => handleQuickSave(true)} 
               disabled={points.length === 0}
