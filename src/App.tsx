@@ -11,6 +11,29 @@ import { translations, Language, t } from './locales';
 import Drawing from 'dxf-writer';
 import * as utm from 'utm';
 
+
+// Helper functions for sharing
+export const encodeProject = (proj: any) => {
+    const data = JSON.stringify({
+        points: proj.points,
+        kavlings: proj.kavlings,
+        kavlingOverrides: proj.kavlingOverrides,
+        kavlingSettings: proj.kavlingSettings,
+        name: proj.name
+    });
+    return encodeURIComponent(btoa(data));
+};
+  
+export const decodeProject = (encoded: string) => {
+    try {
+        const data = JSON.parse(atob(decodeURIComponent(encoded)));
+        return data;
+    } catch (e) {
+        console.error("Failed to decode project:", e);
+        return null;
+    }
+};
+
 const hexToRgb = (hex: string) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   return result ? {
@@ -309,10 +332,37 @@ function calculateStats(points: {lat: number, lng: number}[]) {
   try {
     const polygon = turf.polygon([coords]);
 
-    // 1. Luas berbasis sferis (Spherical Geometry)
-    const areaSqMeters = turf.area(polygon);
+    // 1. Luas berbasis UTM (Shoelace formula) untuk akurasi lokal
+    let areaSqMeters = 0;
+    try {
+        const primaryZone = utm.fromLatLon(points[0].lat, points[0].lng).zoneNum;
+        const utmCoords = points.map(p => {
+             // forceZoneNum is the 3rd param for fromLatLon if available, 
+             // but let's check if the library supports it, or just use standard conversion
+             // Actually utm package from npm: utm.fromLatLon(lat, lon, zoneNum) handles forcing.
+             return utm.fromLatLon(p.lat, p.lng, primaryZone);
+        });
+        
+        // Ensure same UTM zone
+        let area = 0;
+        const n = utmCoords.length;
+        for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            // Shoelace calculation on Cartesian coordinates in meters
+            area += utmCoords[i].easting * utmCoords[j].northing;
+            area -= utmCoords[j].easting * utmCoords[i].northing;
+        }
+        areaSqMeters = Math.abs(area) / 2.0;
+    } catch (e) {
+        // Fallback to Turf spherical geometry if UTM conversion fails (e.g. crossing zones badly)
+        areaSqMeters = turf.area(polygon);
+    }
     const areaHectares = areaSqMeters / 10000;
     const areaAre = areaSqMeters / 100;
+
+    // Check for self intersections
+    const kinks = turf.kinks(polygon);
+    const isSelfIntersecting = kinks.features.length > 0;
 
     // 2. Keliling (Perimeter)
     const perimeter = turf.length(polygon, { units: 'meters' });
@@ -378,10 +428,10 @@ function calculateStats(points: {lat: number, lng: number}[]) {
         });
     }
 
-    return { areaSqMeters, areaHectares, areaAre, perimeter, length: maxLength, width, longestLine, edges };
+    return { areaSqMeters, areaHectares, areaAre, perimeter, length: maxLength, width, longestLine, edges, isSelfIntersecting };
   } catch (e) {
     console.error("Kesalahan dalam memproses poligon:", e);
-    return { areaSqMeters: 0, areaHectares: 0, areaAre: 0, perimeter: 0, length: 0, width: 0, longestLine: null, edges: [] };
+    return { areaSqMeters: 0, areaHectares: 0, areaAre: 0, perimeter: 0, length: 0, width: 0, longestLine: null, edges: [], isSelfIntersecting: false };
   }
 }
 
@@ -798,6 +848,128 @@ export default function App() {
   const [pricePerUnit, setPricePerUnit] = useState<number>(0);
   const [njopEstimate, setNjopEstimate] = useState<string>('');
   
+  // Smart Import State
+  const [importError, setImportError] = useState("");
+
+  const handleSmartImport = () => {
+    setImportError("");
+    if (!importText.trim()) {
+        setImportError("Teks kosong.");
+        return;
+    }
+    
+    try {
+        let extractedPoints: {lat: number, lng: number}[] = [];
+
+        try {
+            const parsed = JSON.parse(importText);
+            
+            const findGeoJSONPoints = (obj: any) => {
+                if (!obj) return;
+                if (obj.type === 'FeatureCollection' && obj.features) {
+                    obj.features.forEach(findGeoJSONPoints);
+                } else if (obj.type === 'Feature' && obj.geometry) {
+                    findGeoJSONPoints(obj.geometry);
+                } else if ((obj.type === 'Polygon' || obj.type === 'MultiPolygon') && obj.coordinates) {
+                    let coordsArr = obj.type === 'Polygon' ? [obj.coordinates] : obj.coordinates;
+                    coordsArr.forEach((poly: any) => {
+                         if (poly.length > 0) {
+                             poly[0].forEach((coord: number[]) => {
+                                 if (coord.length >= 2) {
+                                     extractedPoints.push({ lng: coord[0], lat: coord[1] });
+                                 }
+                             });
+                         }
+                    });
+                }
+            };
+            
+            findGeoJSONPoints(parsed);
+
+            if (extractedPoints.length === 0) {
+                if (Array.isArray(parsed)) {
+                    parsed.forEach(p => {
+                        if (p.lat && p.lng) extractedPoints.push({ lat: parseFloat(p.lat), lng: parseFloat(p.lng) });
+                        else if (p.latitude && p.longitude) extractedPoints.push({ lat: parseFloat(p.latitude), lng: parseFloat(p.longitude) });
+                        else if (Array.isArray(p) && p.length >= 2) {
+                             if (Math.abs(p[0]) > 90) extractedPoints.push({ lat: p[1], lng: p[0] });
+                             else extractedPoints.push({ lat: p[0], lng: p[1] });
+                        }
+                    });
+                }
+            }
+            
+            if (extractedPoints.length === 0) {
+                 const extractDeepCoords = (obj: any) => {
+                     if (!obj || typeof obj !== 'object') return;
+                     if (Array.isArray(obj)) {
+                         obj.forEach(extractDeepCoords);
+                     } else {
+                         if (obj.lat && obj.lng) extractedPoints.push({lat: parseFloat(obj.lat), lng: parseFloat(obj.lng)});
+                         else {
+                             for (let key in obj) {
+                                 if (key === 'coordinates' && Array.isArray(obj[key]) && obj[key].length > 0 && Array.isArray(obj[key][0])) {
+                                      obj[key][0].forEach((c:any) => {
+                                           if(Array.isArray(c) && c.length>=2) {
+                                                if (c[0] > -90 && c[0] < 90 && c[1] > -180 && c[1] < 180 && c[0] !== c[1]) {
+                                                     if (Math.abs(c[0]) > 90) extractedPoints.push({lat: c[1], lng: c[0]});
+                                                     else extractedPoints.push({lat: c[0], lng: c[1]});
+                                                }
+                                           }
+                                      });
+                                 }
+                                 else {
+                                      extractDeepCoords(obj[key]);
+                                 }
+                             }
+                         }
+                     }
+                 }
+                 extractDeepCoords(parsed);
+            }
+        } catch (e) {
+            // Regex fallback
+            const regex = /(-?\d+\.\d+)[\s,;]+(-?\d+\.\d+)/g;
+            let match;
+            while ((match = regex.exec(importText)) !== null) {
+                const a = parseFloat(match[1]);
+                const b = parseFloat(match[2]);
+                if (!isNaN(a) && !isNaN(b)) {
+                    if (Math.abs(a) <= 90 && Math.abs(b) >= 90) {
+                        extractedPoints.push({ lat: a, lng: b }); 
+                    } else if (Math.abs(b) <= 90 && Math.abs(a) >= 90) {
+                        extractedPoints.push({ lat: b, lng: a }); 
+                    } else {
+                        extractedPoints.push({ lat: a, lng: b });
+                    }
+                }
+            }
+        }
+
+        if (extractedPoints.length > 0) {
+            // remove duplicates next to each other
+            const uniquePts = extractedPoints.filter((p, i, arr) => {
+                if(i === 0) return true;
+                return p.lat !== arr[i-1].lat || p.lng !== arr[i-1].lng;
+            });
+            // remove last point if it's the same as first logic? GeoJSON does this. Let's keep it clean
+            if(uniquePts.length > 3 && uniquePts[0].lat === uniquePts[uniquePts.length-1].lat && uniquePts[0].lng === uniquePts[uniquePts.length-1].lng) {
+                 uniquePts.pop();
+            }
+
+            setPoints(uniquePts);
+            setActiveModal('none');
+            setImportText("");
+            setMapCenter([uniquePts[0].lat, uniquePts[0].lng]);
+            alert(`Berhasil mengimpor ${uniquePts.length} titik koordinat.`);
+        } else {
+             setImportError("Tidak menemukan data koordinat valid. Pastikan format teks JSON, GeoJSON, atau list koordinat.");
+        }
+    } catch(e: any) {
+        setImportError("Error processing: " + e.message);
+    }
+  };
+  
   const [exportMode, setExportMode] = useState<'current' | 'batch'>('current');
   const [batchSelectedIds, setBatchSelectedIds] = useState<string[]>([]);
 
@@ -942,6 +1114,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const encodedData = params.get('share');
+    if (encodedData) {
+        const proj = decodeProject(encodedData);
+        if (proj) {
+            loadProject(proj);
+        } else {
+            alert("Gagal memuat proyek dari tautan.");
+        }
+    }
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem('calcare_area_precision', String(areaPrecision));
   }, [areaPrecision]);
 
@@ -996,12 +1181,18 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isEditMode, selectedPointIndex, points]);
 
-  const handleQuickSave = () => {
+  const handleQuickSave = (isManual: boolean = false) => {
     if (points.length === 0) return;
     
+    // If it's an auto-save and there's no project ID, do not create a new project
+    if (!currentProjectId && !isManual) {
+        return;
+    }
+
     setAutoSaveStatus('saving');
     // Save to draft workspace immediately
     localStorage.setItem('calcare_points_draft', JSON.stringify(points));
+    localStorage.setItem('calcare_kavlings_draft', JSON.stringify(kavlings));
     
     // Manage Library Entry
     setSavedProjects(prev => {
@@ -1013,6 +1204,9 @@ export default function App() {
             return { 
               ...p, 
               points, 
+              kavlings,
+              kavlingOverrides,
+              kavlingSettings,
               date: new Date().toISOString(),
               areaSqMeters: stats.areaSqMeters,
               perimeter: stats.perimeter
@@ -1027,6 +1221,9 @@ export default function App() {
           id: newId,
           name: `Survey ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
           points,
+          kavlings,
+          kavlingOverrides,
+          kavlingSettings,
           date: new Date().toISOString(),
           areaSqMeters: stats.areaSqMeters,
           perimeter: stats.perimeter,
@@ -1045,6 +1242,15 @@ export default function App() {
     setAutoSaveStatus('saved');
     setTimeout(() => setAutoSaveStatus('idle'), 2000);
   };
+
+  useEffect(() => {
+    if (points.length === 0) return;
+    const t = setTimeout(() => {
+      handleQuickSave(false);
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [points, kavlings, kavlingOverrides, kavlingSettings]);
+
 
 
   useEffect(() => {
@@ -1182,13 +1388,13 @@ export default function App() {
           return;
       }
 
-      // Detect if search query is a coordinate (e.g. -8.779214, 115.189608)
-      const coordRegex = /^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/;
+      // Detect if search query is a coordinate (e.g. -8.779214, 115.189608 or (-8,7281430, 115,1732980))
+      const coordRegex = /^\s*[\(\[]?\s*(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)\s*[\)\]]?\s*$/;
       const match = searchQuery.trim().match(coordRegex);
 
       if (match) {
-          const lat = parseFloat(match[1]);
-          const lon = parseFloat(match[2]);
+          const lat = parseFloat(match[1].replace(',', '.'));
+          const lon = parseFloat(match[2].replace(',', '.'));
           
           if (!isNaN(lat) && !isNaN(lon)) {
               const coordResult = {
@@ -1435,12 +1641,53 @@ export default function App() {
             pLat = centroid.geometry.coordinates[1];
         }
 
+        // Menggunakan proxy lokal kita di server.ts
         const res = await fetch(`/api/itr?lat=${pLat}&lng=${pLng}`);
-        if (!res.ok) throw new Error("Terjadi kesalahan koneksi ke server ITR");
-        const data = await res.json();
-        setItrData(data);
+        
+        if (res.ok) {
+             const textRes = await res.text();
+             try {
+                 const data = JSON.parse(textRes);
+                 setItrData(data);
+                 return;
+             } catch (e) {
+                 console.warn("ITR returned non-JSON:", textRes.slice(0, 50));
+             }
+        }
+
+        console.warn("ITR failing, falling back to ArcGIS Reverse Geocode");
+        // Fallback to ArcGIS
+        const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=pjson&featureTypes=&location=${pLng},${pLat}`;
+        const arcgisRes = await fetch(arcgisUrl);
+        
+        let arcgisData;
+        const arcgisText = await arcgisRes.text();
+        try {
+            arcgisData = JSON.parse(arcgisText);
+        } catch (e) {
+            throw new Error(`Data ArcGIS tidak valid (bisa jadi terblokir): ${arcgisText.slice(0, 100)}`);
+        }
+
+        if (arcgisData.address) {
+            setItrData({
+                note: "Data GISTARU tidak dapat diakses saat ini. Menampilkan data lokasi alternatif dari ArcGIS.",
+                data: {
+                    administrasi: {
+                        provinsi: arcgisData.address.Region || arcgisData.address.Subregion || "Tidak diketahui",
+                        kecamatan: arcgisData.address.City || arcgisData.address.District || "Tidak diketahui",
+                        kelurahan: arcgisData.address.Neighborhood || arcgisData.address.Address || "Tidak diketahui",
+                        nama_jalan: arcgisData.address.ShortLabel || "",
+                    },
+                    zonasi: null // We don't have zoning data from ArcGIS
+                }
+            });
+        } else {
+             throw new Error("Gagal mengambil data dari server GISTARU maupun ArcGIS.");
+        }
+        
     } catch (err: any) {
-        alert("Gagal mengambil data ITR: " + err.message);
+        console.error(err);
+        alert(`Gagal mengambil data.\n\nDetail: ${err.message}`);
     } finally {
         setIsFetchingItr(false);
     }
@@ -2369,60 +2616,7 @@ export default function App() {
      }
   };
 
-  const extractCoords = (obj: any): any[] => {
-    let coords: any[] = [];
-    if (Array.isArray(obj)) {
-      if (obj.length >= 2 && typeof obj[0] === 'number' && typeof obj[1] === 'number') {
-        coords.push(obj); // [lng, lat]
-      } else {
-        for (const item of obj) {
-          coords = coords.concat(extractCoords(item));
-        }
-      }
-    } else if (typeof obj === 'object' && obj !== null) {
-        if (obj.coordinates) {
-            coords = coords.concat(extractCoords(obj.coordinates));
-        } else if (obj.geometry) {
-            coords = coords.concat(extractCoords(obj.geometry));
-        } else if (obj.features) {
-            coords = coords.concat(extractCoords(obj.features));
-        }
-    }
-    return coords;
-  };
 
-  const handleImportJSON = () => {
-    try {
-      if (!importText.trim()) return;
-      const data = JSON.parse(importText);
-      const coords = extractCoords(data);
-      
-      let newPts = coords.map((c: any) => ({
-        lat: c[1], lng: c[0], color: DEFAULT_POINT_COLOR
-      })).filter(p => p.lat !== undefined && p.lng !== undefined && !isNaN(p.lat) && !isNaN(p.lng));
-
-      if (newPts.length > 2) {
-        const first = newPts[0];
-        const last = newPts[newPts.length - 1];
-        if (Math.abs(first.lat - last.lat) < 0.000001 && Math.abs(first.lng - last.lng) < 0.000001) {
-          newPts.pop();
-        }
-      }
-
-      if (newPts.length > 0) {
-        // clear existing space and paste this
-        setPoints(newPts);
-        setMapCenter([newPts[0].lat, newPts[0].lng]);
-        setImportText('');
-        setActiveModal('none');
-        setCurrentProjectId(null);
-      } else {
-        alert("Tidak menemukan data titik koordinat dalam format: [longitude, latitude]");
-      }
-    } catch (e) {
-      alert("Error parsing JSON. Pastikan format JSON benar.");
-    }
-  };
 
   const handleSaveProject = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2490,7 +2684,15 @@ export default function App() {
   };
 
   const loadProject = (proj: any) => {
-    setPoints(proj.points);
+    setPoints(proj.points || []);
+    if (proj.kavlings) {
+        setKavlings(proj.kavlings);
+        setShowKavlings(true);
+    } else {
+        setKavlings([]);
+    }
+    if (proj.kavlingOverrides) setKavlingOverrides(proj.kavlingOverrides); else setKavlingOverrides({});
+    if (proj.kavlingSettings) setKavlingSettings(proj.kavlingSettings);
     setCurrentProjectId(proj.id);
     setNewProjectName(proj.name || "");
     localStorage.setItem('calcare_points_draft', JSON.stringify(proj.points));
@@ -2509,25 +2711,27 @@ export default function App() {
 
   const handleShareProject = async (proj: any) => {
     setIsSharing(proj.id);
-    const newShareStatus = !proj.shared;
     
     try {
+        const encoded = encodeProject(proj);
+        const shareUrl = `${window.location.origin}${window.location.pathname}?share=${encoded}`;
+        await navigator.clipboard.writeText(shareUrl);
+        setShareStatus(prev => ({ ...prev, [proj.id]: true }));
+        alert("Link berbagi berhasil disalin!");
+        setTimeout(() => {
+          setShareStatus(prev => ({ ...prev, [proj.id]: false }));
+        }, 3000);
+      
+      // Update local storage status
       const updatedProjects = savedProjects.map(p => 
-        p.id === proj.id ? { ...p, shared: newShareStatus } : p
+        p.id === proj.id ? { ...p, shared: true } : p
       );
       setSavedProjects(updatedProjects);
       localStorage.setItem('geocalc_projects', JSON.stringify(updatedProjects));
       
-      if (newShareStatus) {
-        const shareUrl = `${window.location.origin}${window.location.pathname}?share=${proj.id}`;
-        await navigator.clipboard.writeText(shareUrl);
-        setShareStatus(prev => ({ ...prev, [proj.id]: true }));
-        setTimeout(() => {
-          setShareStatus(prev => ({ ...prev, [proj.id]: false }));
-        }, 3000);
-      }
     } catch (err) {
       console.error("Sharing failed:", err);
+      alert("Gagal berbagi proyek.");
     } finally {
       setIsSharing(null);
     }
@@ -3105,15 +3309,16 @@ const CustomZoomControl = () => {
                             <textarea 
                                 value={importText}
                                 onChange={(e) => setImportText(e.target.value)}
-                                placeholder="Paste JSON response di sini..."
+                                placeholder="Paste format JSON, GeoJSON, KML(sebagian), atau array koordinat [lng, lat]..."
                                 className="w-full h-48 p-3 text-[12px] font-mono border border-[var(--color-fg)]/20 bg-transparent rounded focus:outline-none focus:border-[var(--color-fg)]"
                             />
+                            {importError && <p className="text-red-500 text-[10px] uppercase font-bold mt-1">{importError}</p>}
                             <button 
-                                onClick={handleImportJSON} 
+                                onClick={handleSmartImport} 
                                 disabled={!importText.trim()} 
                                 className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-3 text-[12px] uppercase tracking-widest font-bold mt-2 disabled:opacity-50 transition-all"
                             >
-                                Parse & Import Data
+                                Proses Smart Import
                             </button>
                         </div>
                     )}
@@ -3560,7 +3765,7 @@ const CustomZoomControl = () => {
           <div className="flex items-baseline gap-2">
             <span className="text-[20px] lg:text-[26px] font-serif italic font-bold tracking-tight">Calcuare</span>
             <button 
-              onClick={handleQuickSave} 
+              onClick={() => handleQuickSave(true)} 
               disabled={points.length === 0}
               className="ml-2 px-2 py-1 bg-[var(--color-fg)] text-[var(--color-bg)] rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity"
             >
@@ -4059,23 +4264,7 @@ const CustomZoomControl = () => {
                 )}
             </AnimatePresence>
 
-            {showSlopeHeatmap && slopeGridData.length > 0 && (
-                <div className="absolute bottom-6 right-6 z-[2000] bg-[var(--color-surface)]/95 backdrop-blur-md border border-[var(--color-fg)]/20 shadow-[0_10px_30px_rgba(0,0,0,0.2)] p-4 flex flex-col gap-3 text-[var(--color-fg)] pointer-events-none rounded">
-                    <h4 className="text-[10px] uppercase font-bold tracking-widest opacity-80 border-b border-[var(--color-fg)]/10 pb-2">Legenda Slope</h4>
-                    <div className="flex items-center gap-3 text-[11px] font-mono">
-                        <div className="w-4 h-4 rounded-full bg-green-500 shadow-sm" />
-                        <span>&lt; 5% (Datar)</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-[11px] font-mono">
-                        <div className="w-4 h-4 rounded-full bg-yellow-400 shadow-sm" />
-                        <span>5% - 15% (Miring)</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-[11px] font-mono">
-                        <div className="w-4 h-4 rounded-full bg-red-500 shadow-sm" />
-                        <span>&gt; 15% (Curam)</span>
-                    </div>
-                </div>
-            )}
+
 
             <style>{`
               .leaflet-layer.custom-wms-layer {
@@ -4257,6 +4446,50 @@ const CustomZoomControl = () => {
                         </Popup>
                       </Marker>
                     )}
+
+                    {/* Other Saved Projects Polygons */}
+                    {savedProjects.filter(p => p.id !== currentProjectId && p.points && p.points.length > 2).map((proj) => (
+                      <React.Fragment key={`saved-proj-group-${proj.id}`}>
+                        <Polygon
+                          key={`saved-proj-${proj.id}`}
+                          positions={proj.points.map((p: any) => [p.lat, p.lng])}
+                          pathOptions={{
+                            color: '#f97316', // Orange color to distinguish
+                            fillColor: '#f97316',
+                            fillOpacity: 0.15,
+                            weight: 2,
+                            dashArray: '5, 5',
+                            lineJoin: 'miter'
+                          }}
+                          eventHandlers={{
+                            click: (e) => {
+                              L.DomEvent.stopPropagation(e as unknown as Event);
+                              if (window.confirm(`Pindah dan muat data blok "${proj.name || 'Tanpa Nama'}"?`)) {
+                                  loadProject(proj);
+                              }
+                            }
+                          }}
+                        >
+                          <Tooltip sticky direction="center" className="bg-black/80 border-none text-white font-bold text-[10px] rounded p-1">
+                             {proj.name || 'Tanpa Nama'} <br/>
+                             {proj.areaSqMeters?.toLocaleString('id-ID', { maximumFractionDigits: 2 }) || 0} m²
+                          </Tooltip>
+                        </Polygon>
+                        {proj.kavlings && proj.kavlings.length > 0 && proj.kavlings.map((k: any) => (
+                            <GeoJSON 
+                                key={`proj-${proj.id}-kavling-${k.id}`}
+                                data={k.polygon} 
+                                style={() => ({
+                                    color: '#f97316',
+                                    weight: 1,
+                                    fillColor: k.type === 'road' ? '#fed7aa' : '#ffedd5',
+                                    fillOpacity: 0.2
+                                })}
+                                interactive={false}
+                            />
+                        ))}
+                      </React.Fragment>
+                    ))}
 
                     {/* Polygon */}
                     {points.length > 2 && (
@@ -4610,6 +4843,11 @@ const CustomZoomControl = () => {
                 <>{stats.areaAre.toFixed(arePrecision)} are ({stats.areaHectares.toFixed(areaPrecision)} ha)</>
               )}
             </div>
+            {stats.isSelfIntersecting && (
+              <div className="mt-3 text-[11px] font-mono text-red-500 border border-red-500/30 bg-red-500/10 p-2 rounded-sm">
+                ⚠️ <strong>PERINGATAN:</strong> Coba rapikan titik-titik koordinat. Garis batas berpotongan satu sama lain (self-intersecting) menyebabkan perhitungan luas tidak akurat.
+              </div>
+            )}
           </div>
 
           <div className="mt-8 border-t border-[var(--color-fg)]/10 pt-4">

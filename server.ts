@@ -20,7 +20,6 @@ app.get("/api/itr", async (req, res) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
-    let data;
     try {
       const response = await fetch(url, {
         headers: {
@@ -35,31 +34,12 @@ app.get("/api/itr", async (req, res) => {
       if (!response.ok) {
         throw new Error(`GISTARU API responded with ${response.status}`);
       }
-      data = await response.json();
+      const data = await response.json();
+      res.json(data);
     } catch (fetchErr: any) {
-        // If it's a timeout or access issue, return a structured mock for demonstration,
-        // since GISTARU often blocks cloud provider IPs.
-        console.log("ITR API unreachable, generating fallback structural data", fetchErr.message);
-        data = {
-           status: "error_or_mock",
-           note: "GISTARU server is unreachable from this environment. Menampilkan data contoh (MOCK).",
-           data: {
-              administrasi: {
-                 provinsi: "Bali",
-                 kecamatan: "Kecamatan Denpasar Utara",
-                 kelurahan: "Kelurahan Tonja",
-                 nama_jalan: "Gang Mock API",
-                 kode_pos: "80239"
-              },
-              zonasi: {
-                 zona: { kode: "R", nama: "Zona Perumahan" },
-                 sub_zona: { kode: "R-3", nama: "Perumahan Kepadatan Sedang" }
-              }
-           }
-        };
+        console.error("ITR API unreachable, error:", fetchErr.message);
+        res.status(502).json({ error: "GISTARU server error or unreachable", details: fetchErr.message });
     }
-    
-    res.json(data);
   } catch (error: any) {
     console.error("ITR Proxy Error:", error);
     res.status(500).json({ error: "Failed to fetch ITR data", details: error.message });
