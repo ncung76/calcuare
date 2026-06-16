@@ -1,19 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @custom-variant dark (&:is(.dark *));
 
+@theme {
+  --font-sans: "Plus Jakarta Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
 :root {
   --color-bg: #FFFFFF;
-  --color-fg: #1A1A1A;
-  --color-surface: #F9F9F9;
+  --color-fg: #0F172A; /* Elegant Slate-900 */
+  --color-surface: #F8FAFC; /* Soft Slate-50 */
   --color-map: #EBEBE8;
 }
 
 .dark {
-  --color-bg: #121212;
-  --color-fg: #E0E0E0;
-  --color-surface: #1E1E1E;
-  --color-map: #0A0A0A;
+  --color-bg: #0B0F19; /* Darker Slate-950 */
+  --color-fg: #F1F5F9; /* slate-100 */
+  --color-surface: #1E293B; /* slate-800 */
+  --color-map: #0F172A;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+  overflow-x: hidden;
 }
 
 .leaflet-tooltip-transparent {
@@ -21,3 +35,23 @@
   border: none !important;
   box-shadow: none !important;
 }
+
+/* Custom premium scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(241, 245, 249, 0.08);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 23, 42, 0.16);
+}
+
