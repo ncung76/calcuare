@@ -980,6 +980,7 @@ export default function App() {
   const [pointsState, dispatch] = useReducer(pointsReducer, { history: [[]], index: 0 });
   const points = pointsState.history[pointsState.index];
   const [is3D, setIs3D] = useState(false);
+  const [isPerspective, setIsPerspective] = useState(false);
   
   const setPoints = (newVal: any) => dispatch({ type: 'SET', payload: newVal });
   const undo = () => dispatch({ type: 'UNDO' });
@@ -1208,7 +1209,7 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
 
   // Modal State
-  const [activeModal, setActiveModal] = useState<'none' | 'library' | 'settings' | 'export' | 'import' | 'dxfPreview' | 'kavling' | 'menu'>('none');
+  const [activeModal, setActiveModal] = useState<'none' | 'library' | 'settings' | 'export' | 'import' | 'dxfPreview' | 'kavling' | 'menu' | 'tutorial'>('none');
   const [savedProjects, setSavedProjects] = useState<any[]>([]);
   const [newProjectName, setNewProjectName] = useState('');
   const [projectDetails, setProjectDetails] = useState('');
@@ -1230,7 +1231,10 @@ export default function App() {
     setIsGeocoding(true);
     try {
       const response = await fetch(`/api/reverse-geocode?lat=${lat}&lng=${lng}`);
-      if (!response.ok) throw new Error('Failed to fetch address');
+      if (!response.ok) {
+        setReverseGeocodeAddress('');
+        return;
+      }
       const data = await response.json();
       if (data && data.address && data.address.Match_addr) {
         setReverseGeocodeAddress(data.address.Match_addr);
@@ -3734,6 +3738,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                         {activeModal === 'import' && 'Import Data'}
                         {activeModal === 'kavling' && 'Auto Kavling'}
                         {activeModal === 'menu' && 'Menu'}
+                        {activeModal === 'tutorial' && (lang === 'id' ? 'Tutorial Penggunaan' : 'User Tutorial')}
                     </h3>
                     <button onClick={() => setActiveModal('none')} className="text-[12px] uppercase tracking-widest font-bold opacity-50 hover:opacity-100">Close [X]</button>
                 </div>
@@ -3746,6 +3751,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                             <button onClick={() => {setActiveModal('settings');}} className="p-3 text-left border-b border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 flex items-center gap-2"><Settings size={16}/> {t(lang, 'utmSettings')}</button>
                             <button onClick={() => {setActiveModal('import');}} className="p-3 text-left border-b border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 flex items-center gap-2"><FileJson size={16}/> Import Data</button>
                             <button onClick={() => {setActiveModal('export');}} className="p-3 text-left border-b border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 flex items-center gap-2"><Download size={16}/> {t(lang, 'exportData')}</button>
+                            <button onClick={() => {setActiveModal('tutorial');}} className="p-3 text-left border-b border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 flex items-center gap-2"><HelpCircle size={16}/> {t(lang, 'userTutorial')}</button>
                             
                             <div className="pt-4 mt-2 flex flex-col gap-3">
                                 <span className="opacity-50 font-bold ml-3 text-[10px]">PREFERENCES</span>
@@ -3770,6 +3776,86 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                    </button>
                                 </div>
                             </div>
+                        </div>
+                    )}
+
+                    {/* Tutorial Modal */}
+                    {activeModal === 'tutorial' && (
+                        <div className="space-y-6">
+                            <p className="text-[14px] leading-relaxed opacity-85 text-[var(--color-fg)]">
+                                {lang === 'id' 
+                                  ? "Gunakan panduan berikut untuk memaksimalkan penggunaan aplikasi survei dan tata ruang Calcuare V2."
+                                  : "Use this guide to get the most out of Calcuare V2 survey and spatial planning application."}
+                            </p>
+
+                            <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
+                                {/* Step 1: Input & Draw */}
+                                <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-fuchsia-600">
+                                        <MapPin size={16} /> 1. {lang === 'id' ? "Gambar & Input Poligon Lahan" : "Draw & Input Land Polygon"}
+                                    </h4>
+                                    <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
+                                        {lang === 'id' 
+                                            ? "Klik langsung pada peta untuk membuat titik batas lahan, atau masukkan koordinat Latitude/Longitude secara presisi di bilah samping kiri. Anda juga dapat menggunakan tombol 'Gambar Bebas' untuk menggambar area batas kursor Anda."
+                                            : "Click directly on the map to create land boundary points, or enter precise Latitude/Longitude coordinates in the left sidebar. You can also use the 'Freehand Draw' button to outline boundaries using your cursor."}
+                                    </p>
+                                </div>
+
+                                {/* Step 2: Measuring & Metrics */}
+                                <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-blue-600">
+                                        <BarChart2 size={16} /> 2. {lang === 'id' ? "Metrik & Pengukuran Akurat" : "Accurate Metrics & Measurement"}
+                                    </h4>
+                                    <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
+                                        {lang === 'id' 
+                                            ? "Akurasi perhitungan mencapai 99% menggunakan perhitungan geometri sferis (ellipsoid WGS84). Lihat data Luas (m², Are, Hektar), Keliling, serta estimasi dimensi panjang dan lebar secara instan di panel bagian kanan atas."
+                                            : "Calculation accuracy reaches 99% using spherical geometry (WGS84 ellipsoid). View instant Area (m², Are, Hectares), Perimeter, and estimated length and width dimensions in the top-right panel."}
+                                    </p>
+                                </div>
+
+                                {/* Step 3: Auto Kavling */}
+                                <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-orange-600">
+                                        <Layout size={16} /> 3. {lang === 'id' ? "Autolayout Subdivisi Kavling" : "Auto Subdivision Kavling Layout"}
+                                    </h4>
+                                    <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
+                                        {lang === 'id' 
+                                            ? "Bagi area lahan Anda menjadi beberapa kavling perumahan secara otomatis. Masuk ke tab 'Auto Kavling', atur batas luas per kavling, lebar jalan akses (di tengah atau samping) lalu klik 'Auto Kavling'. Anda dapat merubah detail per kavling dengan mudah."
+                                            : "Divide your land area into multiple housing plots automatically. Open the 'Auto Kavling' tab, set the minimum plot area, access road width (center or side layout), and click 'Auto Kavling' to see instantaneous layouts."}
+                                    </p>
+                                </div>
+
+                                {/* Step 4: RDTR Spatial Check */}
+                                <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-green-600">
+                                        <Info size={16} /> 4. {lang === 'id' ? "Analisis Tata Ruang RDTR Bali" : "RDTR Bali Spatial Planning Analysis"}
+                                    </h4>
+                                    <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
+                                        {lang === 'id' 
+                                            ? "Aktifkan mode Analisis Tata Ruang di bagian bawah bilah samping (atau klik tab RDTR) kemudian klik lokasi manapun di peta Bali (Denpasar, Badung, Gianyar, Tabanan). Aplikasi akan mencari data zonasi resmi, KDB, KLB, KDH, dan status perizinan lahan tersebut."
+                                            : "Activate Spatial Planning Analysis at the bottom of the sidebar (or switch to the RDTR tab) and click any location on the Bali map. The app retrieves official zoning data, allowable build covenants (KDB, KLB, KDH), and planning rules."}
+                                    </p>
+                                </div>
+
+                                {/* Step 5: Exporting & DXF */}
+                                <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-rose-600">
+                                        <Download size={16} /> 5. {lang === 'id' ? "Ekspor Laporan & Format CAD (DXF)" : "Export Report & CAD Formats (DXF)"}
+                                    </h4>
+                                    <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
+                                        {lang === 'id' 
+                                            ? "Klik 'Ekspor Data' untuk menghasilkan laporan analisis PDF profesional yang lengkap dengan tangkapan layar peta, daftar batas titik, dan rincian kavling. Anda juga dapat mengunduh file DXF CAD bawaan atau koordinat mentah GeoJSON/CSV."
+                                            : "Click 'Export Data' to generate a professional PDF analysis report containing map snapshots, vertex boundaries coordinates list, and kavling sub-plots. You can also download native DXF CAD files, GeoJSON, or CSV files."}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <button 
+                                onClick={() => setActiveModal('none')} 
+                                className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-3 text-[12px] uppercase tracking-widest font-extrabold shadow-md hover:opacity-90 transition-all cursor-pointer"
+                            >
+                                {lang === 'id' ? "Selesai Membaca" : "Close Tutorial"}
+                            </button>
                         </div>
                     )}
 
@@ -4511,6 +4597,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
             <button onClick={() => setActiveModal('settings')} className={`cursor-pointer pb-1 ${activeModal === 'settings' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'utmSettings')}</button>
             <button onClick={() => setActiveModal('import')} className={`cursor-pointer pb-1 ${activeModal === 'import' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>Import Data</button>
             <button onClick={() => setActiveModal('export')} className={`cursor-pointer pb-1 ${activeModal === 'export' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'exportData')}</button>
+            <button onClick={() => setActiveModal('tutorial')} className={`cursor-pointer pb-1 ${activeModal === 'tutorial' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'userTutorial')}</button>
           </nav>
 
           <div className="hidden lg:flex items-center gap-2 lg:gap-4 ml-2 lg:ml-0 lg:border-l border-[var(--color-fg)]/10 lg:pl-4">
@@ -5378,15 +5465,46 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
 
 
 
-              <button
-                onClick={() => setIs3D(!is3D)}
-                className="absolute top-4 right-16 z-[2000] bg-white text-black p-2 rounded shadow-md border hover:bg-gray-100 font-mono text-[10px] uppercase font-bold"
-              >
-                {is3D ? '2D View' : '3D View'}
-              </button>
+              <div className="absolute top-4 right-16 z-[2000] flex gap-2">
+                {!is3D && (
+                   <button
+                     onClick={() => setIsPerspective(!isPerspective)}
+                     className={`bg-white dark:bg-slate-800 text-black dark:text-white p-2 rounded shadow-md border hover:bg-gray-100 dark:hover:bg-slate-700 font-mono text-[10px] uppercase font-bold transition-all ${isPerspective ? 'ring-2 ring-fuchsia-500' : ''}`}
+                     title={lang === 'id' ? "Miringkan Perspektif" : "Tilt Perspective"}
+                   >
+                     {isPerspective ? 'Flat 2D' : 'Tilt 2D'}
+                   </button>
+                )}
+              </div>
+              
               {is3D ? (
                   <Map3D points={points} kavlings={kavlings} />
               ) : (
+                <motion.div 
+                  initial={false}
+                  animate={isPerspective ? {
+                    rotateX: 45,
+                    scale: 2,
+                    y: '5%',
+                  } : {
+                    rotateX: 0,
+                    scale: 1,
+                    y: '0%',
+                  }}
+                  transition={{ duration: 0.8, ease: "easeInOut" }}
+                  style={{
+                    perspective: 1000,
+                    transformStyle: 'preserve-3d',
+                    originX: 0.5,
+                    originY: 0.5,
+                  }}
+                  onUpdate={() => {
+                      if (mapInstanceRef.current) {
+                          mapInstanceRef.current.invalidateSize();
+                      }
+                  }}
+                  className="w-full h-full pointer-events-auto"
+                >
                 <MapContainer 
                     ref={mapInstanceRef}
                     center={[-8.6705, 115.2126]} 
@@ -6025,6 +6143,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                 lang={lang}
             />
             </MapContainer>
+            </motion.div>
           )}
           </div>
           
