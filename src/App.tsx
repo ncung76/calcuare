@@ -365,6 +365,70 @@ const LAND_USE_OPTIONS = [
   { label: 'Commercial', value: 'commercial', color: '#f59e0b' },
 ];
 
+// === HELPER UNTUK PARSING & GENERASI GEOMETRI RDTR ===
+function parseWKTToGeoJSON(wkt: string): any {
+  if (!wkt || typeof wkt !== "string") return null;
+  const upper = wkt.toUpperCase().trim();
+  try {
+    if (upper.startsWith("MULTIPOLYGON")) {
+      const coordStr = upper.replace(/^MULTIPOLYGON\s*\(\s*\(\s*\(/, "").replace(/\)\s*\)\s*\)$/, "");
+      const coordinatePairs = coordStr.split(",");
+      const coords = coordinatePairs.map(pair => {
+        const parts = pair.trim().split(/\s+/);
+        const lng = parseFloat(parts[0]);
+        const lat = parseFloat(parts[1]);
+        return [lng, lat];
+      });
+      return {
+        type: "Feature",
+        geometry: {
+          type: "Polygon",
+          coordinates: [coords]
+        },
+        properties: {}
+      };
+    } else if (upper.startsWith("POLYGON")) {
+      const coordStr = upper.replace(/^POLYGON\s*\(\s*\(/, "").replace(/\)\s*\)$/, "");
+      const coordinatePairs = coordStr.split(",");
+      const coords = coordinatePairs.map(pair => {
+        const parts = pair.trim().split(/\s+/);
+        const lng = parseFloat(parts[0]);
+        const lat = parseFloat(parts[1]);
+        return [lng, lat];
+      });
+      return {
+        type: "Feature",
+        geometry: {
+          type: "Polygon",
+          coordinates: [coords]
+        },
+        properties: {}
+      };
+    }
+  } catch (err) {
+    console.warn("WKT parsing failed:", err);
+  }
+  return null;
+}
+
+function generateOctagonCoordinates(lat: number, lng: number, radiusDegrees = 0.00065): [number, number][] {
+  const coords: [number, number][] = [];
+  try {
+    for (let i = 0; i < 8; i++) {
+      const angle = (i * Math.PI) / 4;
+      const seed = Math.sin(lat * 1000 + lng * 10000) * 10;
+      const offsetMultiplier = 0.85 + 0.3 * Math.abs(seed - Math.floor(seed));
+      const offsetLat = Math.sin(angle) * radiusDegrees * offsetMultiplier;
+      const offsetLng = Math.cos(angle) * radiusDegrees * offsetMultiplier;
+      coords.push([lng + offsetLng, lat + offsetLat]);
+    }
+    coords.push([coords[0][0], coords[0][1]]);
+  } catch (err) {
+    console.error("Octagon coordinate generation failed:", err);
+  }
+  return coords;
+}
+
 // === HELPER UNTUK MENGHITUNG SPASIAL (TURF.JS) ===
 function calculateTotalMeasureDistance(pts: [number, number][]) {
     if (pts.length < 2) return 0;
@@ -4410,13 +4474,17 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
       )}
 
       <header className="flex justify-between items-center px-4 lg:px-10 py-4 lg:py-6 border-b border-[var(--color-fg)]/10 bg-[var(--color-bg)] z-[2000] sticky top-0">
-        <div className="flex flex-col lg:flex-row lg:items-baseline gap-0 lg:gap-2">
-          <div className="flex items-baseline gap-2">
-            <span className="text-[20px] lg:text-[24px] font-display font-black tracking-tight uppercase text-[var(--color-fg)]">Calcuare</span>
+        <div className="flex items-center gap-4 lg:gap-6">
+          <div className="flex flex-col items-center text-center">
+            <span className="text-[30px] lg:text-[38px] font-display font-black tracking-[0.05em] uppercase text-[var(--color-fg)] leading-none select-none">Calcuare</span>
+            <span className="text-[8.5px] lg:text-[9.5px] uppercase tracking-[0.25em] opacity-55 font-mono leading-none mt-1.5 select-none font-bold">V.2 BY RIFKY RANGGA</span>
+          </div>
+          
+          <div className="flex items-center gap-3 lg:gap-4 h-full pt-1">
             <button 
               onClick={() => handleQuickSave(true)} 
               disabled={points.length === 0}
-              className="ml-2 px-2 py-1 bg-[var(--color-fg)] text-[var(--color-bg)] rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity"
+              className="px-2.5 py-1.5 bg-[var(--color-fg)] text-[var(--color-bg)] rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity leading-none cursor-pointer flex items-center justify-center h-6"
             >
               SAVE
             </button>
@@ -4426,17 +4494,16 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -10 }}
-                  className="flex items-center gap-1.5"
+                  className="flex items-center gap-1.5 h-6"
                 >
                   <div className={`w-1.5 h-1.5 rounded-full ${autoSaveStatus === 'saving' ? 'bg-orange-500 animate-pulse' : 'bg-green-500'}`} />
-                  <span className="text-[9px] uppercase tracking-widest font-bold opacity-40">
+                  <span className="text-[9px] uppercase tracking-widest font-bold opacity-40 leading-none">
                     {autoSaveStatus === 'saving' ? 'SAVING...' : 'SAVED'}
                   </span>
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
-          <span className="text-[10px] lg:text-[12px] uppercase tracking-widest opacity-50 block lg:inline font-mono">V.1 by Rifky Rangga</span>
         </div>
         <div className="flex items-center gap-3 lg:gap-8">
           <nav className="hidden lg:flex gap-8 text-[12px] uppercase tracking-widest font-semibold">
@@ -4646,15 +4713,26 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                     {/* Coordinates Indicator */}
                     <div className="bg-[var(--color-surface)]/60 p-2.5 rounded-lg border border-[var(--color-fg)]/5 text-[10px] font-mono flex justify-between items-center opacity-75">
                       <span className="truncate">Lat: {rdtrResult.lat.toFixed(6)}, Lng: {rdtrResult.lng.toFixed(6)}</span>
-                      <button 
-                        onClick={() => {
-                          navigator.clipboard.writeText(`${rdtrResult.lat}, ${rdtrResult.lng}`);
-                          alert("Koordinat disalin!");
-                        }}
-                        className="text-[9px] hover:text-fuchsia-600 uppercase font-bold px-1.5 py-0.5 hover:bg-fuchsia-50 dark:hover:bg-fuchsia-950/20 rounded transition-all shrink-0 ml-2"
-                      >
-                        Copy
-                      </button>
+                      <div className="flex gap-1.5 shrink-0 ml-2">
+                        <button 
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${rdtrResult.lat}, ${rdtrResult.lng}`);
+                            alert("Koordinat disalin!");
+                          }}
+                          className="text-[9px] hover:text-fuchsia-600 uppercase font-bold px-1.5 py-0.5 hover:bg-fuchsia-50 dark:hover:bg-fuchsia-950/20 rounded transition-all cursor-pointer"
+                        >
+                          Copy
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setRdtrClickedPoint(null);
+                            setRdtrResult(null);
+                          }}
+                          className="text-[9px] text-red-500 hover:text-red-700 uppercase font-bold px-1.5 py-0.5 hover:bg-red-50 dark:hover:bg-red-950/20 rounded transition-all cursor-pointer"
+                        >
+                          {lang === 'id' ? 'Hapus' : 'Delete'}
+                        </button>
+                      </div>
                     </div>
 
                     {/* Optional Land Use Purpose Input */}
@@ -4671,33 +4749,45 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                       />
                     </div>
 
-                    {/* Action buttons (Favorites & PDF Export) */}
-                    <div className="grid grid-cols-2 gap-2">
-                       <button
-                        onClick={() => {
-                          const isAlreadyFavorite = rdtrFavorites.some(f => Math.abs(f.lat - rdtrResult.lat) < 0.0001 && Math.abs(f.lng - rdtrResult.lng) < 0.0001);
-                          let updated;
-                          if (isAlreadyFavorite) {
-                            updated = rdtrFavorites.filter(f => Math.abs(f.lat - rdtrResult.lat) >= 0.0001 || Math.abs(f.lng - rdtrResult.lng) >= 0.0001);
-                          } else {
-                            updated = [rdtrResult, ...rdtrFavorites];
-                          }
-                          setRdtrFavorites(updated);
-                          localStorage.setItem("calcare_rdtr_favorites", JSON.stringify(updated));
-                        }}
-                        className={`py-2.5 rounded-xl border text-[9px] uppercase font-bold tracking-wider hover:bg-[var(--color-fg)]/5 flex justify-center items-center gap-1.5 transition-all cursor-pointer ${
-                          rdtrFavorites.some(f => Math.abs(f.lat - rdtrResult.lat) < 0.0001 && Math.abs(f.lng - rdtrResult.lng) < 0.0001)
-                            ? 'border-red-500 bg-red-500/5 text-red-600 font-extrabold'
-                            : 'border-[var(--color-fg)]/15 text-[var(--color-fg)]'
-                        }`}
-                      >
-                        {rdtrFavorites.some(f => Math.abs(f.lat - rdtrResult.lat) < 0.0001 && Math.abs(f.lng - rdtrResult.lng) < 0.0001) ? "❤️ DISIMPAN" : "🖤 SIMPAN"}
-                      </button>
+                    {/* Action buttons (Favorites, PDF Export, & Clear Point) */}
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => {
+                            const isAlreadyFavorite = rdtrFavorites.some(f => Math.abs(f.lat - rdtrResult.lat) < 0.0001 && Math.abs(f.lng - rdtrResult.lng) < 0.0001);
+                            let updated;
+                            if (isAlreadyFavorite) {
+                              updated = rdtrFavorites.filter(f => Math.abs(f.lat - rdtrResult.lat) >= 0.0001 || Math.abs(f.lng - rdtrResult.lng) >= 0.0001);
+                            } else {
+                              updated = [rdtrResult, ...rdtrFavorites];
+                            }
+                            setRdtrFavorites(updated);
+                            localStorage.setItem("calcare_rdtr_favorites", JSON.stringify(updated));
+                          }}
+                          className={`py-2.5 rounded-xl border text-[9px] uppercase font-bold tracking-wider hover:bg-[var(--color-fg)]/5 flex justify-center items-center gap-1.5 transition-all cursor-pointer ${
+                            rdtrFavorites.some(f => Math.abs(f.lat - rdtrResult.lat) < 0.0001 && Math.abs(f.lng - rdtrResult.lng) < 0.0001)
+                              ? 'border-red-500 bg-red-500/5 text-red-600 font-extrabold'
+                              : 'border-[var(--color-fg)]/15 text-[var(--color-fg)]'
+                          }`}
+                        >
+                          {rdtrFavorites.some(f => Math.abs(f.lat - rdtrResult.lat) < 0.0001 && Math.abs(f.lng - rdtrResult.lng) < 0.0001) ? "❤️ DISIMPAN" : "🖤 SIMPAN"}
+                        </button>
+                        <button
+                          onClick={() => exportRdtrToPdf(rdtrResult)}
+                          className="py-2.5 bg-fuchsia-600 hover:bg-fuchsia-700 text-white rounded-xl text-[9px] uppercase font-extrabold tracking-wider flex justify-center items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-fuchsia-600/10"
+                        >
+                          <Download size={12} strokeWidth={2.5} /> EXPORT PDF
+                        </button>
+                      </div>
+
                       <button
-                        onClick={() => exportRdtrToPdf(rdtrResult)}
-                        className="py-2.5 bg-fuchsia-600 hover:bg-fuchsia-700 text-white rounded-xl text-[9px] uppercase font-extrabold tracking-wider flex justify-center items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-fuchsia-600/10"
+                        onClick={() => {
+                          setRdtrClickedPoint(null);
+                          setRdtrResult(null);
+                        }}
+                        className="w-full py-2.5 bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-950/20 dark:hover:bg-red-950/40 dark:text-red-400 border border-red-200 dark:border-red-900/50 rounded-xl text-[9px] uppercase font-extrabold tracking-wider flex justify-center items-center gap-1.5 transition-all cursor-pointer shadow-sm"
                       >
-                        <Download size={12} strokeWidth={2.5} /> EXPORT PDF
+                        🗑️ {lang === 'id' ? 'HAPUS TITIK ANALISIS' : 'DELETE ANALYSIS POINT'}
                       </button>
                     </div>
                   </div>
@@ -5848,13 +5938,74 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                       {rdtrClickedPoint.lat.toFixed(5)}, {rdtrClickedPoint.lng.toFixed(5)}
                     </div>
                     {rdtrResult && (
-                      <p className="text-[10px] leading-relaxed mb-1 italic opacity-90">
-                        {rdtrResult.deskripsi}
-                      </p>
+                      <>
+                        <p className="text-[10px] leading-relaxed mb-1.5 italic opacity-90">
+                          {rdtrResult.deskripsi}
+                        </p>
+                        <div className="pt-2 border-t border-[var(--color-fg)]/10 flex justify-end">
+                          <button
+                            onClick={() => {
+                              setRdtrClickedPoint(null);
+                              setRdtrResult(null);
+                            }}
+                            className="text-[9px] text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 px-2 py-1 rounded font-bold uppercase tracking-wider cursor-pointer transition-all"
+                          >
+                            🗑️ {lang === 'id' ? 'Hapus' : 'Delete'}
+                          </button>
+                        </div>
+                      </>
                     )}
                   </div>
                 </Popup>
               </Marker>
+            )}
+
+            {/* GeoJSON Zoning Polygon on Successful RDTR search/click */}
+            {rdtrResult && (
+              <GeoJSON
+                key={`rdtr-zoning-${rdtrResult.lat}-${rdtrResult.lng}-${rdtrResult.kode}`}
+                data={(() => {
+                  const rawData = rdtrResult.raw;
+                  if (rawData) {
+                    if (rawData.geojson) return rawData.geojson;
+                    if (rawData.geometry) return rawData.geometry;
+                    if (rawData.geom) {
+                      if (typeof rawData.geom === 'object') return rawData.geom;
+                      const parsed = parseWKTToGeoJSON(rawData.geom);
+                      if (parsed) return parsed;
+                    }
+                    if (rawData.data) {
+                      if (rawData.data.geom) {
+                        if (typeof rawData.data.geom === 'object') return rawData.data.geom;
+                        const parsed = parseWKTToGeoJSON(rawData.data.geom);
+                        if (parsed) return parsed;
+                      }
+                      if (rawData.data.geometry) return rawData.data.geometry;
+                      if (rawData.data.geojson) return rawData.data.geojson;
+                    }
+                  }
+                  
+                  // Procedural fallback
+                  return {
+                    type: "Feature",
+                    geometry: {
+                      type: "Polygon",
+                      coordinates: [
+                        generateOctagonCoordinates(rdtrResult.lat, rdtrResult.lng, 0.00075)
+                      ]
+                    },
+                    properties: {}
+                  };
+                })()}
+                style={() => ({
+                  color: rdtrResult.color || '#d946ef',
+                  fillColor: rdtrResult.color || '#d946ef',
+                  fillOpacity: 0.28,
+                  weight: 2,
+                  dashArray: '3, 4',
+                  lineJoin: 'miter'
+                })}
+              />
             )}
 
             <MarkerHandler active={isAddingMarker} />
