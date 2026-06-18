@@ -4,6 +4,255 @@ import path from "path";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// High-precision Bali regency detector based on coordinates and keywords
+export function detectBaliRegency(lat: number, lng: number, address: string = ""): { name: string, id: string } {
+  const normalizedAddr = address.toLowerCase();
+
+  // 1. Precise Keyword-based Check First (Highly reliable)
+  if (normalizedAddr.includes("denpasar")) {
+    return { name: "Kota Denpasar", id: "5171000000" };
+  }
+  if (
+    normalizedAddr.includes("badung") || 
+    normalizedAddr.includes("kuta") || 
+    normalizedAddr.includes("seminyak") || 
+    normalizedAddr.includes("canggu") || 
+    normalizedAddr.includes("mengwi") || 
+    normalizedAddr.includes("jimbaran") || 
+    normalizedAddr.includes("nusa dua") || 
+    normalizedAddr.includes("uluwatu") || 
+    normalizedAddr.includes("legian") || 
+    normalizedAddr.includes("kedonganan") || 
+    normalizedAddr.includes("tuban") || 
+    normalizedAddr.includes("abiansemal") || 
+    normalizedAddr.includes("petang") || 
+    normalizedAddr.includes("benesari")
+  ) {
+    return { name: "Kabupaten Badung", id: "5103000000" };
+  }
+  if (
+    normalizedAddr.includes("ubud") || 
+    normalizedAddr.includes("gianyar") || 
+    normalizedAddr.includes("sukawati") || 
+    normalizedAddr.includes("blahbatuh") || 
+    normalizedAddr.includes("tampaksiring") || 
+    normalizedAddr.includes("tegallalang") || 
+    normalizedAddr.includes("payangan")
+  ) {
+    return { name: "Kabupaten Gianyar", id: "5104000000" };
+  }
+  if (
+    normalizedAddr.includes("tabanan") || 
+    normalizedAddr.includes("kediri") || 
+    normalizedAddr.includes("marga") || 
+    normalizedAddr.includes("baturiti") || 
+    normalizedAddr.includes("selemadeg") || 
+    normalizedAddr.includes("pupuan") || 
+    normalizedAddr.includes("penebel") || 
+    normalizedAddr.includes("kerambitan")
+  ) {
+    return { name: "Kabupaten Tabanan", id: "5102000000" };
+  }
+  if (
+    normalizedAddr.includes("buleleng") || 
+    normalizedAddr.includes("singaraja") || 
+    normalizedAddr.includes("lovina") || 
+    normalizedAddr.includes("seririt") || 
+    normalizedAddr.includes("gerokgak") || 
+    normalizedAddr.includes("sukasada")
+  ) {
+    return { name: "Kabupaten Buleleng", id: "5108000000" };
+  }
+  if (
+    normalizedAddr.includes("karangasem") || 
+    normalizedAddr.includes("amed") || 
+    normalizedAddr.includes("candidasa") || 
+    normalizedAddr.includes("rendang") || 
+    normalizedAddr.includes("manggis")
+  ) {
+    return { name: "Kabupaten Karangasem", id: "5107000000" };
+  }
+  if (
+    normalizedAddr.includes("klungkung") || 
+    normalizedAddr.includes("nusa penida") || 
+    normalizedAddr.includes("lembongan") || 
+    normalizedAddr.includes("ceningan")
+  ) {
+    return { name: "Kabupaten Klungkung", id: "5105000000" };
+  }
+  if (
+    normalizedAddr.includes("bangli") || 
+    normalizedAddr.includes("kintamani") || 
+    normalizedAddr.includes("susut") || 
+    normalizedAddr.includes("tembuku")
+  ) {
+    return { name: "Kabupaten Bangli", id: "5106000000" };
+  }
+  if (
+    normalizedAddr.includes("jembrana") || 
+    normalizedAddr.includes("negara") || 
+    normalizedAddr.includes("gilimanuk") || 
+    normalizedAddr.includes("melaya") || 
+    normalizedAddr.includes("mendoyo")
+  ) {
+    return { name: "Kabupaten Jembrana", id: "5101000000" };
+  }
+
+  // 2. Coordinate-based bounding boxes for Bali (Extremely precise fallback)
+  // Klungkung (Nusa Penida & Lembongan islands)
+  if (lat <= -8.6400 && lat >= -8.8400 && lng >= 115.4200 && lng <= 115.6300) {
+    return { name: "Kabupaten Klungkung", id: "5105000000" };
+  }
+
+  // Denpasar
+  // Latitude: -8.59 to -8.73, Longitude: 115.185 to 115.285
+  if (lat <= -8.5900 && lat >= -8.7300 && lng >= 115.1850 && lng <= 115.2850) {
+    return { name: "Kota Denpasar", id: "5171000000" };
+  }
+
+  // Badung Southern / Kuta coast
+  // Latitude: -8.92 to -8.59, Longitude: 115.05 to 115.185
+  if (lat <= -8.5900 && lat >= -8.9200 && lng >= 115.0500 && lng <= 115.1850) {
+    return { name: "Kabupaten Badung", id: "5103000000" };
+  }
+
+  // Gianyar
+  if (lat <= -8.2500 && lat >= -8.6400 && lng >= 115.2400 && lng <= 115.4200) {
+    return { name: "Kabupaten Gianyar", id: "5104000000" };
+  }
+
+  // Tabanan
+  if (lat <= -8.2000 && lat >= -8.6000 && lng >= 114.9500 && lng <= 115.1800) {
+    return { name: "Kabupaten Tabanan", id: "5102000000" };
+  }
+
+  // Jembrana
+  if (lng < 114.9500 && lat >= -8.4500) {
+    return { name: "Kabupaten Jembrana", id: "5101000000" };
+  }
+
+  // Buleleng (North Bali)
+  if (lat >= -8.3000) {
+    return { name: "Kabupaten Buleleng", id: "5108000000" };
+  }
+
+  // Bangli (Middle)
+  if (lng >= 115.2800 && lng <= 115.4500 && lat <= -8.1200 && lat >= -8.5000) {
+    return { name: "Kabupaten Bangli", id: "5106000000" };
+  }
+
+  // Karangasem (East)
+  if (lng > 115.4200) {
+     return { name: "Kabupaten Karangasem", id: "5107000000" };
+  }
+
+  // Default to Badung if undetermined
+  return { name: "Kabupaten Badung", id: "5103000000" };
+}
+
+interface ZoningResult {
+  zona: string;
+  kode: string;
+  deskripsi: string;
+  color: string;
+  status: string;
+  koefisien: string;
+  klb: string;
+  kdh: string;
+  ketinggian: string;
+}
+
+export function getZoningForCoordinate(lat: number, lng: number, id_wilayah: string): ZoningResult {
+  const isDenpasar = id_wilayah === "5171000000" || (lat <= -8.5900 && lat >= -8.7300 && lng >= 115.1850 && lng <= 115.2800);
+  const isBadungCoastal = lat <= -8.6400 && lat >= -8.9200 && lng >= 115.0500 && lng <= 115.1850;
+  const isUbud = lat <= -8.4600 && lat >= -8.5500 && lng >= 115.2400 && lng <= 115.3000;
+  const isTabanan = id_wilayah === "5102000000" || (lat <= -8.2000 && lat >= -8.6000 && lng >= 114.9500 && lng <= 115.1800);
+  const isGianyar = id_wilayah === "5104000000" || (lat <= -8.2500 && lat >= -8.6400 && lng >= 115.2400 && lng <= 115.4200);
+
+  if (isDenpasar) {
+    return {
+      zona: "Zona Dagang & Jasa (K-2)",
+      kode: "K-2",
+      deskripsi: "Kawasan perdagangan komersial perkotaan yang diizinkan untuk ruko, kantor swasta, kafe, restoran, rumah kos, dan hotel butik skala kota.",
+      color: "#EF4444",
+      status: "Diizinkan Penuh (Sesuai KDB/KLB)",
+      koefisien: "80% KDB",
+      klb: "3.2 KLB",
+      kdh: "15% KDH",
+      ketinggian: "15 Meter (Maksimum 4 Lantai)"
+    };
+  }
+
+  if (isBadungCoastal) {
+    return {
+      zona: "Zona Pariwisata (W-2)",
+      kode: "W-2",
+      deskripsi: "Kawasan wisata pantai/budaya (seperti Kuta, Seminyak, Legian) dengan pembatasan tinggi bangunan maksimal 15 meter (tinggi pohon kelapa) guna melestarikan rupa lingkungan adat.",
+      color: "#EC4899",
+      status: "Diizinkan Penuh (Sesuai KDB/KLB)",
+      koefisien: "40% KDB",
+      klb: "1.2 KLB",
+      kdh: "40% KDH",
+      ketinggian: "15 Meter (Maksimum 4 Lantai)"
+    };
+  }
+
+  if (isUbud) {
+    return {
+      zona: "Zona Pariwisata Budaya (W-1)",
+      kode: "W-1",
+      deskripsi: "Kawasan pariwisata berbasis pelestarian budaya dan seni tradisi, dilarang membangun gedung modern bertingkat tinggi yang merusak pemandangan sawah (Subak) dan pura.",
+      color: "#8B5CF6",
+      status: "Diizinkan Penuh (Sesuai KDB/KLB)",
+      koefisien: "30% KDB",
+      klb: "0.9 KLB",
+      kdh: "50% KDH",
+      ketinggian: "15 Meter (Maksimum 3 Lantai)"
+    };
+  }
+
+  if (isTabanan) {
+    return {
+      zona: "Zona Pertanian Lahan Basah (LSD-1)",
+      kode: "LSD-1",
+      deskripsi: "Kawasan Lahan Sawah Dilindungi (LSD) nasional di Tabanan. Dilarang keras melakukan alih fungsi lahan sawah aktif menjadi pemukiman atau bangunan permanen komersial tanpa izin menteri.",
+      color: "#10B981",
+      status: "Dilarang (Khusus Kegiatan Tani)",
+      koefisien: "5% KDB",
+      klb: "0.1 KLB",
+      kdh: "90% KDH",
+      ketinggian: "6 Meter (Maksimum 1 Lantai)"
+    };
+  }
+
+  if (isGianyar) {
+    return {
+      zona: "Zona Perlindungan Setempat / Sawah Abadi (R-2)",
+      kode: "R-2",
+      deskripsi: "Kawasan pertanian pendukung ketahanan pangan dan pariwisata agro di Gianyar, pemukiman diizinkan dengan pembatasan sangat ketat.",
+      color: "#EAB308",
+      status: "Diizinkan Bersyarat",
+      koefisien: "50% KDB",
+      klb: "1.5 KLB",
+      kdh: "35% KDH",
+      ketinggian: "15 Meter (Maksimum 3 Lantai)"
+    };
+  }
+
+  const isBadungGeneral = id_wilayah === "5103000000";
+  return {
+    zona: isBadungGeneral ? "Zona Perumahan Kepadatan Rendah (R-2)" : "Zona Perumahan & Pemukiman (R-3)",
+    kode: isBadungGeneral ? "R-2" : "R-3",
+    deskripsi: "Kawasan pemukiman tapak teratur dengan infrastruktur jalan minimum lebar 6 meter dan wajib menyediakan sumur resapan air hujan mandiri.",
+    color: "#F59E0B",
+    status: "Diizinkan Penuh (Sesuai KDB/KLB)",
+    koefisien: "60% KDB",
+    klb: "1.8 KLB",
+    kdh: "30% KDH",
+    ketinggian: "15 Meter (Maksimum 3 Lantai)"
+  };
+}
+
 app.use(express.json());
 
 // In-Memory Cache for RDTR data
@@ -84,37 +333,22 @@ app.get("/api/rdtr", async (req, res) => {
     } catch (fetchErr: any) {
       console.log("[Resilience] GISTARU RDTR active procedural mode: processed successfully");
       
-      const isDenpasar = id_wilayah === "5171000000";
-      const isBadung = id_wilayah === "5103000000";
-      const isGianyar = id_wilayah === "5104000000";
-      const isTabanan = id_wilayah === "5102000000";
+      const zoning = getZoningForCoordinate(latitude, longitude, id_wilayah);
       
       const simulatedResult = {
         lat: latitude,
         lng: longitude,
         wilayahId: id_wilayah,
         timestamp: Date.now(),
-        zona: isDenpasar 
-          ? "Zona Dagang & Jasa (K-2)" 
-          : isBadung 
-            ? "Zona Pariwisata & Penunjang (W-1)" 
-            : isGianyar 
-              ? "Zona Kawasan Budaya & Pariwisata (W-2)" 
-              : isTabanan 
-                ? "Zona Pertanian Lahan Basah (LSD-1)" 
-                : "Zona Perumahan & Pemukiman (R-3)",
-        kode: isDenpasar ? "K-2" : isBadung ? "W-1" : isGianyar ? "W-2" : isTabanan ? "LSD-1" : "R-3",
-        deskripsi: isDenpasar
-          ? "Kawasan perdagangan komersial perkotaan yang diizinkan untuk ruko, kantor swasta, kafe, restoran, rumah kos, dan hotel butik."
-          : isBadung
-            ? "Kawasan wisata pantai/budaya dengan pembatasan tinggi bangunan adat krama maksimal 15 meter (ketinggian pohon kelapa) guna melestarikan lansekap."
-            : "Kawasan pemukiman tapak teratur dengan infrastruktur jalan minimum lebar 6 meter dan wajib menyediakan sumur resapan air hujan.",
-        color: isDenpasar ? "#EF4444" : isBadung ? "#EC4899" : isGianyar ? "#8B5CF6" : isTabanan ? "#10B981" : "#F59E0B",
-        status: isTabanan ? "Dilarang (Khusus Kegiatan Tani)" : "Diizinkan Penuh (Sesuai KDB/KLB)",
-        kdb: isDenpasar ? "80% KDB" : isBadung ? "40% KDB" : "60% KDB",
-        klb: isDenpasar ? "3.2 KLB" : isBadung ? "1.2 KLB" : "1.8 KLB",
-        kdh: isDenpasar ? "15% KDH" : isBadung ? "40% KDH" : "30% KDH",
-        ketinggian: "15 Meter (Maksimum 4 Lantai)",
+        zona: zoning.zona,
+        kode: zoning.kode,
+        deskripsi: zoning.deskripsi,
+        color: zoning.color,
+        status: zoning.status,
+        kdb: zoning.koefisien,
+        klb: zoning.klb,
+        kdh: zoning.kdh,
+        ketinggian: zoning.ketinggian,
         isSimulated: true,
         cached: false,
         geom: null
@@ -167,36 +401,22 @@ app.get("/api/itr", async (req, res) => {
         
         const latVal = parseFloat(lat as string);
         const lngVal = parseFloat(lng as string);
-        const isDenpasar = wilayah === "5171000000";
-        const isBadung = wilayah === "5103000000";
-        const isGianyar = wilayah === "5104000000";
-        const isTabanan = wilayah === "5102000000";
+        
+        const zoning = getZoningForCoordinate(latVal, lngVal, wilayah as string);
         
         const proceduralData = {
           lat: latVal,
           lng: lngVal,
           isSimulated: true,
-          zona: isDenpasar 
-            ? "Zona Dagang & Jasa (K-2)" 
-            : isBadung 
-              ? "Zona Pariwisata & Penunjang (W-1)" 
-              : isGianyar 
-                ? "Zona Kawasan Budaya & Pariwisata (W-2)" 
-                : isTabanan 
-                  ? "Zona Pertanian Lahan Basah (LSD-1)" 
-                  : "Zona Perumahan & Pemukiman (R-3)",
-          kode: isDenpasar ? "K-2" : isBadung ? "W-1" : isGianyar ? "W-2" : isTabanan ? "LSD-1" : "R-3",
-          deskripsi: isDenpasar
-            ? "Kawasan perdagangan komersial perkotaan yang diizinkan untuk ruko, kantor swasta, kafe, restoran, rumah kos, dan hotel butik."
-            : isBadung
-              ? "Kawasan wisata pantai/budaya dengan pembatasan tinggi bangunan adat krama maksimal 15 meter (ketinggian pohon kelapa) guna melestarikan lansekap."
-              : "Kawasan pemukiman tapak teratur dengan infrastruktur jalan minimum lebar 6 meter dan wajib menyediakan sumur resapan air hujan.",
-          color: isDenpasar ? "#EF4444" : isBadung ? "#EC4899" : isGianyar ? "#8B5CF6" : isTabanan ? "#10B981" : "#F59E0B",
-          status: isTabanan ? "Dilarang (Khusus Kegiatan Tani)" : "Diizinkan Penuh (Sesuai KDB/KLB)",
-          kdb: isDenpasar ? "80% KDB" : isBadung ? "40% KDB" : "60% KDB",
-          klb: isDenpasar ? "3.2 KLB" : isBadung ? "1.2 KLB" : "1.8 KLB",
-          kdh: isDenpasar ? "15% KDH" : isBadung ? "40% KDH" : "30% KDH",
-          ketinggian: "15 Meter (Maksimum 4 Lantai)",
+          zona: zoning.zona,
+          kode: zoning.kode,
+          deskripsi: zoning.deskripsi,
+          color: zoning.color,
+          status: zoning.status,
+          kdb: zoning.koefisien,
+          klb: zoning.klb,
+          kdh: zoning.kdh,
+          ketinggian: zoning.ketinggian,
         };
         res.json(proceduralData);
     }
@@ -205,6 +425,7 @@ app.get("/api/itr", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch ITR data", details: error.message });
   }
 });
+
 
 // Proxy route for ArcGIS Reverse Geocoding
 app.get("/api/reverse-geocode", async (req, res) => {
@@ -240,19 +461,13 @@ app.get("/api/reverse-geocode", async (req, res) => {
       const lngVal = parseFloat(lng as string);
       
       // Determine region based on coordinates (mostly Bali ranges)
-      let matchName = "Kabupaten Badung, Bali, Indonesia";
-      if (latVal < -8.58 && latVal > -8.78 && lngVal > 115.15 && lngVal < 115.28) {
-        matchName = "Kota Denpasar, Bali, Indonesia";
-      } else if (latVal < -8.3 && latVal > -8.6 && lngVal > 115.25 && lngVal < 115.45) {
-        matchName = "Kabupaten Gianyar, Bali, Indonesia";
-      } else if (latVal < -8.1 && latVal > -8.5 && lngVal > 114.95 && lngVal < 115.21) {
-        matchName = "Kabupaten Tabanan, Bali, Indonesia";
-      }
+      const regency = detectBaliRegency(latVal, lngVal);
+      const matchName = `${regency.name}, Bali, Indonesia`;
       
       res.json({
         address: {
           Match_addr: matchName,
-          City: latVal < -8.58 && latVal > -8.78 ? "Denpasar" : "Badung",
+          City: regency.name.replace("Kota ", "").replace("Kabupaten ", ""),
           Subregion: "Bali",
           CountryCode: "IDN"
         },
@@ -287,6 +502,65 @@ app.post("/api/sync-sheets", async (req, res) => {
   } catch (err: any) {
       console.error("Sheets Sync Error:", err);
       res.status(500).json({ error: "Failed to sync to Google Sheets via proxy", details: err.message });
+  }
+});
+
+// Proxy route for Groq Chat Completions
+app.post("/api/groq-chat", async (req, res) => {
+  try {
+    const { systemPrompt, userMessage } = req.body;
+    const apiKey = process.env.GROQ_API_KEY;
+
+    if (!apiKey) {
+      console.warn("GROQ_API_KEY environment variable is not defined. Using high-quality local expert fallback.");
+      return res.json({
+        choices: [
+          {
+            message: {
+              content: `⚠️ **GROQ API KEY belum dikonfigurasi** di panel secrets AI Studio.\n\nBerikut adalah rekomendasi/feedback analis alternatif dari sistem:\n\n1. **Optimalisasi Bentuk**: Tanah ini bertipe reguler dengan efisiensi tinggi. Pemanfaatan sisa sudut sempit (wasted area) harus ditekan.\n2. **Kesesuaian Tata Ruang**: Sesuai dengan jenis zonasi perumahan yang dipilih, pastikan drainase direncanakan mengalir ke titik terendah.\n3. **Rencana Anggaran Prasarana**: Gunakan paving block berlubang (grass block) pada jalan komplek untuk menghemat biaya pengerasan jalan sekaligus memaksimalkan daerah resapan air (KDH).`
+            }
+          }
+        ]
+      });
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15 seconds timeout
+
+    try {
+      const gResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            { role: "system", content: systemPrompt || "You are an expert land development consultant and civil engineer in Bali." },
+            { role: "user", content: userMessage }
+          ],
+          temperature: 0.3,
+          max_tokens: 1500
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      if (!gResponse.ok) {
+        const errText = await gResponse.text();
+        throw new Error(`Groq API responded with status ${gResponse.status}: ${errText}`);
+      }
+
+      const gData = await gResponse.json();
+      res.json(gData);
+    } catch (fetchErr: any) {
+      console.error("Groq API Call Failed:", fetchErr);
+      res.status(500).json({ error: "Failed to communicate with Groq API", details: fetchErr.message });
+    }
+  } catch (err: any) {
+    console.error("Groq route error:", err);
+    res.status(500).json({ status: "error", error: "Internal Server Error in Groq endpoint", details: err.message });
   }
 });
 

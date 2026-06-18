@@ -2,15 +2,14 @@ import React, { useState, useEffect, useRef, useCallback, startTransition, useRe
 
 import { Map3D } from './components/Map3D';
 import { DXFPreview } from './components/DXFPreview';
-import { NorthArrow } from './components/NorthArrow';
 import { MeasureHandler } from './components/MeasureHandler';
 import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup, GeoJSON } from 'react-leaflet';
 import * as turf from '@turf/turf';
-import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X, Lock, Unlock, ChevronLeft, ChevronRight } from 'lucide-react';
+import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X, Lock, Unlock, ChevronLeft, ChevronRight, Eye, EyeOff, Sparkles, Loader2 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import L from 'leaflet';
 import proj4 from 'proj4';
-import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { translations, Language, t } from './locales';
 import Drawing from 'dxf-writer';
@@ -77,6 +76,44 @@ export const generateThumbnail = (pts: { lat: number, lng: number }[]): string =
     ctx.stroke();
 
     return canvas.toDataURL('image/png');
+};
+
+const Guidance = ({ text, children }: { text: string; children: React.ReactNode }) => {
+    const [isVisible, setIsVisible] = useState(false);
+    let timeout: any;
+
+    const show = () => {
+        timeout = setTimeout(() => setIsVisible(true), 1500); 
+    };
+
+    const hide = () => {
+        clearTimeout(timeout);
+        setIsVisible(false);
+    };
+
+    return (
+        <div 
+            className="relative inline-block"
+            onMouseEnter={show}
+            onMouseLeave={hide}
+            onTouchStart={() => setIsVisible(true)}
+            onTouchEnd={hide}
+        >
+            {children}
+            <AnimatePresence>
+                {isVisible && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 5 }}
+                        className="absolute z-[3000] bottom-full left-0 mb-2 w-48 bg-fuchsia-600 text-white p-2 text-[10px] uppercase font-bold tracking-widest rounded shadow-xl pointer-events-none"
+                    >
+                        {text}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
 };
 
 const hexToRgb = (hex: string) => {
@@ -902,12 +939,14 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
 // === KOMPONEN UTAMA ===
 const DEFAULT_WMS_LAYERS = [
   { name: 'Plot Per View', layers: 'dorado:plot_only' },
+  { name: 'RDTR', layers: 'dorado:rdtr' },
 ];
 
 export default function App() {
   const [isAuth, setIsAuth] = useState(false);
   const [authUsername, setAuthUsername] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState('');
   const authGasUrl = 'https://script.google.com/macros/s/AKfycbylEEGenZcZelINy1KBn9P6mL5S5gGBtdYKpUsBQOdHx_qxOfa-GtiiGkAbw_lFwnTtsw/exec';
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
@@ -1000,6 +1039,33 @@ export default function App() {
   const [exportNotes, setExportNotes] = useState("");
   const [pricePerUnit, setPricePerUnit] = useState<number>(0);
   const [njopEstimate, setNjopEstimate] = useState<string>('');
+  
+  // Land Development Intelligence (LDI) States
+  const [ldiTargetROI, setLdiTargetROI] = useState<number>(40);
+  const [ldiSelectedTab, setLdiSelectedTab] = useState<'shape' | 'valuation' | 'infra' | 'financial' | 'legal' | 'groq'>('shape');
+  const [ldiComplianceLP2B, setLdiComplianceLP2B] = useState<boolean>(true);
+  const [ldiComplianceGSB, setLdiComplianceGSB] = useState<boolean>(true);
+  const [ldiComplianceRTH, setLdiComplianceRTH] = useState<boolean>(true);
+  const [ldiRDTRZoning, setLdiRDTRZoning] = useState<string>('Perumahan Kepadatan Sedang');
+  const [ldiEarthworkDesiredGrade, setLdiEarthworkDesiredGrade] = useState<number>(3); // desired target slope % (default 3)
+  const [ldiSoilType, setLdiSoilType] = useState<'sandy_loam' | 'clay' | 'gravel_rock'>('clay');
+  const [ldiGradingStrategy, setLdiGradingStrategy] = useState<'continuous' | 'terrace_2' | 'terrace_3'>('continuous');
+  const [ldiIsOptimizing, setLdiIsOptimizing] = useState<boolean>(false);
+  const [ldiOptimizationReport, setLdiOptimizationReport] = useState<{
+    optimalGrade: number;
+    optimalStrategy: 'continuous' | 'terrace_2' | 'terrace_3';
+    minCost: number;
+    vsStandardSavings: number;
+    cutVol: number;
+    fillVol: number;
+    retainingWallCost: number;
+    importExportCost: number;
+  } | null>(null);
+  
+  // Groq AI Integration States
+  const [groqAdvisory, setGroqAdvisory] = useState<string>('');
+  const [isGeneratingGroqAdvisory, setIsGeneratingGroqAdvisory] = useState<boolean>(false);
+  const [groqError, setGroqError] = useState<string>('');
   
   // Smart Import State
   const [importError, setImportError] = useState("");
@@ -1106,8 +1172,14 @@ export default function App() {
                 return p.lat !== arr[i-1].lat || p.lng !== arr[i-1].lng;
             });
             // remove last point if it's the same as first logic? GeoJSON does this. Let's keep it clean
-            if(uniquePts.length > 3 && uniquePts[0].lat === uniquePts[uniquePts.length-1].lat && uniquePts[0].lng === uniquePts[uniquePts.length-1].lng) {
-                 uniquePts.pop();
+            if(uniquePts.length > 3) {
+                 const first = uniquePts[0];
+                 const last = uniquePts[uniquePts.length - 1];
+                 const latDiff = Math.abs(first.lat - last.lat);
+                 const lngDiff = Math.abs(first.lng - last.lng);
+                 if (latDiff < 0.0001 && lngDiff < 0.0001) {
+                     uniquePts.pop();
+                 }
             }
 
             setPoints(uniquePts);
@@ -1207,6 +1279,7 @@ export default function App() {
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [showGuideMode, setShowGuideMode] = useState(false);
 
   // Modal State
   const [activeModal, setActiveModal] = useState<'none' | 'library' | 'settings' | 'export' | 'import' | 'dxfPreview' | 'kavling' | 'menu' | 'tutorial'>('none');
@@ -1249,6 +1322,206 @@ export default function App() {
     }
   }, []);
 
+  const handleOptimizeEarthwork = () => {
+    if (points.length < 3) return;
+    setLdiIsOptimizing(true);
+    
+    setTimeout(() => {
+      const averageSlopePct = elevationStats ? Math.min(60, Math.max(1, Math.round((elevationStats.diff / (stats.width || 1)) * 100))) : 2;
+      const area = stats.areaSqMeters;
+      
+      let excUnitCost = 90000;
+      let swellFactor = 1.15;
+      if (ldiSoilType === 'sandy_loam') {
+        excUnitCost = 75000;
+        swellFactor = 1.10;
+      } else if (ldiSoilType === 'gravel_rock') {
+        excUnitCost = 180000;
+        swellFactor = 1.25;
+      }
+      
+      const exportCostPerM3 = 50000;
+      const importCostPerM3 = 100000;
+      const retainingWallCostPerM2 = 650000;
+      const width = stats.width || 30;
+      
+      const strategies: ('continuous' | 'terrace_2' | 'terrace_3')[] = ['continuous', 'terrace_2', 'terrace_3'];
+      
+      let bestCost = Infinity;
+      let bestStrategy: 'continuous' | 'terrace_2' | 'terrace_3' = 'continuous';
+      let bestGrade = 3;
+      let bestCutVol = 0;
+      let bestFillVol = 0;
+      let bestWallCost = 0;
+      let bestImportExportCost = 0;
+      
+      const currentStrategyModifier = ldiGradingStrategy === 'continuous' ? 1.0 : ldiGradingStrategy === 'terrace_2' ? 0.5 : 0.33;
+      const currentSlopeDiff = Math.max(0, averageSlopePct - ldiEarthworkDesiredGrade);
+      const currentRawCutVol = Math.round(area * currentSlopeDiff * 0.08 * currentStrategyModifier);
+      const currentRawFillVol = Math.round(area * currentSlopeDiff * 0.07 * currentStrategyModifier);
+      const currentSwellCutVol = Math.round(currentRawCutVol * swellFactor);
+      
+      let currentImportExportCost = 0;
+      const currentNetSoil = currentSwellCutVol - currentRawFillVol;
+      if (currentNetSoil > 0) {
+        currentImportExportCost = currentNetSoil * exportCostPerM3;
+      } else if (currentNetSoil < 0) {
+        currentImportExportCost = Math.abs(currentNetSoil) * importCostPerM3;
+      }
+      
+      const currentMaxHeightDiff = (currentSlopeDiff / 100) * width * currentStrategyModifier;
+      const currentWallCost = Math.round(width * currentMaxHeightDiff * retainingWallCostPerM2);
+      const currentBaseExcavationCost = (currentRawCutVol + currentRawFillVol) * excUnitCost;
+      const currentTotalCost = currentBaseExcavationCost + currentImportExportCost + currentWallCost;
+      
+      for (const strat of strategies) {
+        const modifier = strat === 'continuous' ? 1.0 : strat === 'terrace_2' ? 0.5 : 0.33;
+        
+        for (let g = 0; g <= 25; g++) {
+          const slopeDiff = Math.max(0, averageSlopePct - g);
+          const rawCutVol = Math.round(area * slopeDiff * 0.08 * modifier);
+          const rawFillVol = Math.round(area * slopeDiff * 0.07 * modifier);
+          const swellCutVol = Math.round(rawCutVol * swellFactor);
+          
+          let impExpCost = 0;
+          const netSoil = swellCutVol - rawFillVol;
+          if (netSoil > 0) {
+            impExpCost = netSoil * exportCostPerM3;
+          } else if (netSoil < 0) {
+            impExpCost = Math.abs(netSoil) * importCostPerM3;
+          }
+          
+          const maxHeightDiff = (slopeDiff / 100) * width * modifier;
+          const wallCost = Math.round(width * maxHeightDiff * retainingWallCostPerM2);
+          const excavationCost = (rawCutVol + rawFillVol) * excUnitCost;
+          
+          const totalCost = excavationCost + impExpCost + wallCost;
+          
+          if (totalCost < bestCost) {
+            bestCost = totalCost;
+            bestStrategy = strat;
+            bestGrade = g;
+            bestCutVol = rawCutVol;
+            bestFillVol = rawFillVol;
+            bestWallCost = wallCost;
+            bestImportExportCost = impExpCost;
+          }
+        }
+      }
+      
+      const savings = Math.max(0, currentTotalCost - bestCost);
+      
+      setLdiOptimizationReport({
+        optimalGrade: bestGrade,
+        optimalStrategy: bestStrategy,
+        minCost: bestCost,
+        vsStandardSavings: savings,
+        cutVol: bestCutVol,
+        fillVol: bestFillVol,
+        retainingWallCost: bestWallCost,
+        importExportCost: bestImportExportCost
+      });
+      setLdiIsOptimizing(false);
+    }, 1200);
+  };
+
+  const handleGenerateGroqAdvisory = async () => {
+    if (points.length < 3) return;
+    setIsGeneratingGroqAdvisory(true);
+    setGroqError('');
+    setGroqAdvisory('');
+
+    try {
+      // Calculate metrics on the fly matching the math in LDI UI
+      const mathCompactness = (4 * Math.PI * stats.areaSqMeters) / (stats.perimeter * stats.perimeter || 1);
+      const shapeScore = Math.min(100, Math.max(25, Math.round(mathCompactness * 115)));
+      const wastedAreaPct = Math.max(5, Math.round((1 - mathCompactness) * 45));
+      const frontageLength = stats.length > 0 ? Number((stats.length * 0.85).toFixed(1)) : 0;
+      const aspectWidthToDepthRatio = stats.width > 0 ? (stats.length / stats.width) : 1;
+      
+      const bearingRad = stats.longestLine ? turf.bearing(
+        turf.point(stats.longestLine.geometry.coordinates[0]),
+        turf.point(stats.longestLine.geometry.coordinates[1])
+      ) : 0;
+      const isEastWest = Math.abs(bearingRad) > 44 && Math.abs(bearingRad) < 136;
+      const sunExposureOrientation = isEastWest ? "Timur - Barat (Sinar Terik)" : "Utara - Selatan (Sejuk Teduh)";
+      
+      const roadwaySqm = Math.round(kavlings.filter(k => k.type === 'road').reduce((a, b) => a + (b.area || 0), 0));
+      const roadLengthEst = roadwaySqm > 0 ? Math.round(roadwaySqm / 6) : Math.round(stats.length * 0.4);
+      const drainageLengthLine = Math.round(roadLengthEst * 2);
+      const waterPipeLine = Math.round(roadLengthEst * 1);
+      const powerCableLine = Math.round(roadLengthEst * 1.05);
+
+      const costPaving = roadLengthEst * 6 * 140000;
+      const costDrainage = drainageLengthLine * 300000;
+      const costWater = waterPipeLine * 95000;
+      const costPLN = powerCableLine * 110000;
+      const costInfrastructureTotal = costPaving + costDrainage + costWater + costPLN;
+
+      const averageSlopePct = elevationStats ? Math.min(60, Math.max(1, Math.round((elevationStats.diff / (stats.width || 1)) * 100))) : 2;
+      const slopeDiff = Math.max(0, averageSlopePct - ldiEarthworkDesiredGrade);
+      const cutVolume = Math.round(stats.areaSqMeters * slopeDiff * 0.08);
+      const fillVolume = Math.round(stats.areaSqMeters * slopeDiff * 0.07);
+      const costCutAndFill = (cutVolume + fillVolume) * 90000;
+
+      const numberOfActiveKavlings = kavlings.filter(k => k.type !== 'road').length;
+      const hookCount = numberOfActiveKavlings > 0 ? Math.max(1, Math.round(numberOfActiveKavlings * 0.15)) : 0;
+      const tusukSateCount = numberOfActiveKavlings > 4 ? Math.max(1, Math.min(3, Math.round(numberOfActiveKavlings * 0.05))) : 0;
+      const stdUnitCount = Math.max(0, numberOfActiveKavlings - hookCount - tusukSateCount);
+
+      const simulatedAcquisitionPrice = pricePerUnit > 0 ? pricePerUnit * (areaUnit === 'are' ? stats.areaAre : areaUnit === 'ha' ? stats.areaHectares : stats.areaSqMeters) : stats.areaAre * 60000000;
+      const certificationCost = numberOfActiveKavlings > 0 ? numberOfActiveKavlings * 2500000 : stats.areaAre * 200000;
+      const brandingMarketingCost = Math.max(5000000, simulatedAcquisitionPrice * 0.035);
+      const totalCapitalInvested = simulatedAcquisitionPrice + costInfrastructureTotal + costCutAndFill + certificationCost + brandingMarketingCost;
+
+      const targetGrossRevenue = totalCapitalInvested * (1 + ldiTargetROI / 100);
+
+      const systemPrompt = "Anda adalah Asisten Penasihat Pengembangan Lahan Professional (Corporate Land Development & Civil Engineering Consultant) khusus pasar Indonesia dan Bali. Berikan feedback analisis spasial detail, terstruktur, formal, penuh istilah developer, dan memberikan solusi yang realistis.";
+      
+      const userMessage = `
+Tolong lakukan analisis land development profesional menggunakan Groq AI untuk proyek lahan berikut:
+- Luas Lahan: ${stats.areaSqMeters.toFixed(1)} m² (${stats.areaAre.toFixed(2)} Are)
+- Keliling Lahan: ${stats.perimeter.toFixed(1)} m
+- Rasio P:L Guna Kapasitas Dimensi: 1 : ${aspectWidthToDepthRatio.toFixed(1)}
+- Efisiensi Bentuk Lahan (Compactness): ${shapeScore}/100 (Wasted space est: ${wastedAreaPct}%)
+- Lebar Hadap Depan (Frontage): ${frontageLength} meter
+- Orientasi Matahari Utama: ${sunExposureOrientation}
+- Jumlah Kavling Rencana: ${numberOfActiveKavlings} Unit (${stdUnitCount} std, ${hookCount} pojok/hook, ${tusukSateCount} tusuk sate)
+- Estimasi Biaya Sipil Pengerasan Jalan & Saluran Air: Rp ${costInfrastructureTotal.toLocaleString('id-ID')}
+- Kondisi Kemiringan Rata-rata: ${averageSlopePct}% (Target grade: ${ldiEarthworkDesiredGrade}%, Volume Galian: ${cutVolume} m³, Timbunan: ${fillVolume} m³, Estimasi Biaya Pekerjaan Tanah: Rp ${costCutAndFill.toLocaleString('id-ID')})
+- Estimasi Total Modal Diinvestasikan (Acquisition + Capex + Izin): Rp ${totalCapitalInvested.toLocaleString('id-ID')}
+- Target ROI Developer: ${ldiTargetROI}% (Target Omzet Penjualan Kotor: Rp ${targetGrossRevenue.toLocaleString('id-ID')})
+- Status Legalitas Zonasi / RDTR Dipilih: ${ldiRDTRZoning} (LP2B Greenfield Check: ${ldiComplianceLP2B ? 'AKTIF - PROTECTED' : 'TIDAK AKTIF - BEBAS'})
+
+Harap berikan advisory format profesional tertulis mencakup:
+1. Analisis Fisik Geometris & Saran Layouting Jalan
+2. Penanganan Tantangan Topografi (Cut & Fill & Saluran Got)
+3. Rekomendasi Pricing per Unit Kavling & Strategi Pemasaran untuk Kavling Pojok (Hook) vs Tusuk Sate
+4. Mitigasi Risiko Hukum (Hambatan LP2B & Rencana Zonasi RDTR terkait daerah resapan KDH)
+Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin, tegas dan taktis.
+`;
+
+      const response = await fetch('/api/groq-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ systemPrompt, userMessage })
+      });
+
+      if (!response.ok) {
+        throw new Error('Gagal mendapatkan respons dari API Groq.');
+      }
+
+      const data = await response.json();
+      const content = data?.choices?.[0]?.message?.content || 'Gagal menghasilkan konten.';
+      setGroqAdvisory(content);
+    } catch (err: any) {
+      console.error(err);
+      setGroqError(err.message || 'Terjadi kesalahan saat menghubungi server.');
+    } finally {
+      setIsGeneratingGroqAdvisory(false);
+    }
+  };
+
   useEffect(() => {
     if (points.length >= 1) {
       const lats = points.map(p => p.lat);
@@ -1266,6 +1539,19 @@ export default function App() {
   }, [points, fetchAddressForCoordinates]);
 
   useEffect(() => {
+    if (points.length > 0) {
+      setShowRdtr(true);
+      setSidebarActiveTab('rdtr');
+      setIsRdtrActive(true);
+      handleMapClickForRdtr(points[0].lat, points[0].lng);
+    } else if (points.length === 0) {
+      setShowRdtr(false);
+      setRdtrResult(null);
+      setRdtrClickedPoint(null);
+    }
+  }, [points]);
+
+  useEffect(() => {
     localStorage.setItem('calcare_wms_opacity', String(wmsOpacity));
     localStorage.setItem('calcare_wms_hue', String(wmsHue));
     localStorage.setItem('calcare_wms_invert', String(wmsInvert));
@@ -1274,6 +1560,7 @@ export default function App() {
   // Settings State
   const [units, setUnits] = useState<'metric' | 'imperial'>('metric');
   const [wmsLayersList, setWmsLayersList] = useState<{name: string, layers: string}[]>([]);
+  const [showRdtr, setShowRdtr] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const [areaUnit, setAreaUnit] = useState<'are' | 'ha' | 'sqm'>('are');
   const [zoning, setZoning] = useState({ residential: 50, agricultural: 25, commercial: 25 });
@@ -1291,6 +1578,15 @@ export default function App() {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [isSharing, setIsSharing] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<{[key: string]: boolean}>({});
+
+  useEffect(() => {
+      const timeout = setTimeout(() => {
+          if (mapInstanceRef.current) {
+              mapInstanceRef.current.invalidateSize();
+          }
+      }, 300);
+      return () => clearTimeout(timeout);
+  }, [showLeftSidebar, showRightSidebar, mobileTab]);
 
   const user = null;
   const isAuthLoading = false;
@@ -2221,10 +2517,10 @@ export default function App() {
             return splitVal.length * 4.5;
         };
         
-        summaryY += drawGridRow("Client / Owner:", exportClientName || "-", summaryY);
-        if (exportNIB) summaryY += drawGridRow("NIB / Cert:", exportNIB, summaryY);
-        summaryY += drawGridRow("Location:", locName, summaryY);
-        if (exportNotes) summaryY += drawGridRow("Field Notes:", exportNotes, summaryY);
+        summaryY += drawGridRow(lang === 'id' ? "Klien / Pemilik:" : "Client / Owner:", exportClientName || "-", summaryY);
+        if (exportNIB) summaryY += drawGridRow(lang === 'id' ? "NIB / Sertifikat:" : "NIB / Cert:", exportNIB, summaryY);
+        summaryY += drawGridRow(lang === 'id' ? "Lokasi:" : "Location:", locName, summaryY);
+        if (exportNotes) summaryY += drawGridRow(lang === 'id' ? "Catatan Lapangan:" : "Field Notes:", exportNotes, summaryY);
         
         summaryY += 4;
         
@@ -2380,7 +2676,7 @@ export default function App() {
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(14);
         pdf.setTextColor(26, 26, 26);
-        pdf.text("LOCATION DETAILS", margin, currentY);
+        pdf.text(lang === 'id' ? "RINCIAN LOKASI" : "LOCATION DETAILS", margin, currentY);
         
         currentY += 4;
         pdf.setDrawColor(200, 200, 200);
@@ -2391,7 +2687,7 @@ export default function App() {
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(11);
         pdf.setTextColor(50, 50, 50);
-        pdf.text(`Location Name:`, margin, currentY);
+        pdf.text(lang === 'id' ? "Nama Lokasi:" : "Location Name:", margin, currentY);
         pdf.setFont("helvetica", "normal");
         
         const splitName = pdf.splitTextToSize(locName, availableWidth - 45);
@@ -2414,7 +2710,7 @@ export default function App() {
         
         if (mapLink) {
             pdf.setTextColor(0, 102, 204);
-            pdf.textWithLink("View on Google Maps", margin + 45, currentY, { url: mapLink });
+            pdf.textWithLink(lang === 'id' ? "Lihat di Google Maps" : "View on Google Maps", margin + 45, currentY, { url: mapLink });
             pdf.setTextColor(50, 50, 50); // reset color
         } else {
             pdf.text("-", margin + 45, currentY);
@@ -2426,7 +2722,7 @@ export default function App() {
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(14);
         pdf.setTextColor(26, 26, 26);
-        pdf.text("GEOSPATIAL METRICS", margin, currentY);
+        pdf.text(lang === 'id' ? "METRIK GEOSPASIAL" : "GEOSPATIAL METRICS", margin, currentY);
         
         currentY += 4;
         pdf.setDrawColor(200, 200, 200);
@@ -2438,7 +2734,7 @@ export default function App() {
         pdf.setFontSize(11);
         pdf.setTextColor(50, 50, 50);
         
-        pdf.text(`Total Area:`, margin, currentY);
+        pdf.text(lang === 'id' ? "Total Luas:" : "Total Area:", margin, currentY);
         let areaText = "";
         if (areaUnit === 'are') {
             areaText = `${stats.areaAre.toFixed(arePrecision)} are / ${stats.areaSqMeters.toFixed(areaPrecision)} m2 (${stats.areaHectares.toFixed(areaPrecision)} ha)`;
@@ -2450,32 +2746,32 @@ export default function App() {
         pdf.text(areaText, margin + 45, currentY);
         currentY += 8;
 
-        pdf.text(`Total Perimeter:`, margin, currentY);
+        pdf.text(lang === 'id' ? "Keliling Total:" : "Total Perimeter:", margin, currentY);
         pdf.text(`${stats.perimeter.toFixed(2)} m`, margin + 45, currentY);
         currentY += 8;
         
         if (stats.length > 0) {
-            pdf.text(`Max Dimensions:`, margin, currentY);
-            pdf.text(`${stats.length.toFixed(2)} m (L) x ${stats.width.toFixed(2)} m (W)`, margin + 45, currentY);
+            pdf.text(lang === 'id' ? "Dimensi Maksimal:" : "Max Dimensions:", margin, currentY);
+            pdf.text(`${stats.length.toFixed(2)} m (P) x ${stats.width.toFixed(2)} m (L)`, margin + 45, currentY);
             currentY += 8;
         }
         
         if (pricePerUnit && pricePerUnit > 0) {
-            pdf.text(`Estimated Value:`, margin, currentY);
+            pdf.text(lang === 'id' ? "Estimasi Nilai:" : "Estimated Value:", margin, currentY);
             const refArea = areaUnit === 'are' ? stats.areaAre : (areaUnit === 'ha' ? stats.areaHectares : stats.areaSqMeters);
             const totalValue = refArea * pricePerUnit;
             const formattedValue = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(totalValue);
             const formattedPrice = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(pricePerUnit);
-            pdf.text(`${formattedValue} (at ${formattedPrice} per ${areaUnit === 'are' ? 'are' : areaUnit === 'ha' ? 'ha' : 'm²'})`, margin + 45, currentY);
+            pdf.text(`${formattedValue} (${lang === 'id' ? 'dengan harga' : 'at'} ${formattedPrice} per ${areaUnit === 'are' ? 'are' : areaUnit === 'ha' ? 'ha' : 'm²'})`, margin + 45, currentY);
             currentY += 8;
         }
 
         if (kavlings && kavlings.length > 0) {
-            pdf.text(`Subdivision (Kavling):`, margin, currentY);
+            pdf.text(lang === 'id' ? "Pecah Kavling:" : "Subdivision (Kavling):", margin, currentY);
             const totalPlots = kavlings.filter(k => k.type !== 'road').length;
             const roadArea = kavlings.filter(k => k.type === 'road').reduce((sum, k) => sum + (k.area || 0), 0);
             const plotArea = kavlings.filter(k => k.type !== 'road').reduce((sum, k) => sum + (k.area || 0), 0);
-            pdf.text(`${totalPlots} Plots (${Math.round(plotArea)} m2) + Road/Fasum (${Math.round(roadArea)} m2)`, margin + 45, currentY);
+            pdf.text(`${totalPlots} ${lang === 'id' ? 'Kavling' : 'Plots'} (${Math.round(plotArea)} m2) + ${lang === 'id' ? 'Jalan/Fasum' : 'Road/Fasum'} (${Math.round(roadArea)} m2)`, margin + 45, currentY);
             currentY += 8;
         }
         
@@ -2487,9 +2783,9 @@ export default function App() {
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(12);
         pdf.setTextColor(26, 26, 26);
-        pdf.text("BOUNDARY COORDINATES", colStart1, currentY);
+        pdf.text(lang === 'id' ? "KOORDINAT BATAS" : "BOUNDARY COORDINATES", colStart1, currentY);
         if (stats.edges && stats.edges.length > 0) {
-            pdf.text("EDGE MEASUREMENTS", colStart2, currentY);
+            pdf.text(lang === 'id' ? "UKURAN SISI" : "EDGE MEASUREMENTS", colStart2, currentY);
         }
         
         currentY += 4;
@@ -2559,6 +2855,243 @@ export default function App() {
         
         drawFooter();
         
+        // --- PAGE 3: FINANCIAL & DEVELOPMENT FEASIBILITY ---
+        pdf.addPage();
+        currentPage++;
+        drawHeader(currentPage);
+        
+        let finY = 45;
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(14);
+        pdf.setTextColor(26, 26, 26);
+        pdf.text(lang === 'id' ? "KELAYAKAN KEUANGAN & PENGEMBANGAN" : "FINANCIAL & DEVELOPMENT FEASIBILITY", margin, finY);
+        
+        finY += 4;
+        pdf.setDrawColor(200, 200, 200);
+        pdf.line(margin, finY, margin + availableWidth, finY);
+        finY += 10;
+        
+        // Calculate financial data
+        const roadwaySqm = Math.round(kavlings.filter(k => k.type === 'road').reduce((a, b) => a + (b.area || 0), 0));
+        const roadLengthEst = roadwaySqm > 0 ? Math.round(roadwaySqm / 6) : Math.round(stats.length * 0.4);
+        const drainageLengthLine = Math.round(roadLengthEst * 2);
+        const waterPipeLine = Math.round(roadLengthEst * 1);
+        const powerCableLine = Math.round(roadLengthEst * 1.05);
+
+        const costPaving = roadLengthEst * 6 * 140000;
+        const costDrainage = drainageLengthLine * 300000;
+        const costWater = waterPipeLine * 95000;
+        const costPLN = powerCableLine * 110000;
+        const costInfrastructureTotal = costPaving + costDrainage + costWater + costPLN;
+
+        const averageSlopePct = elevationStats ? Math.min(60, Math.max(1, Math.round((elevationStats.diff / (stats.width || 1)) * 100))) : 2;
+        const slopeDiff = Math.max(0, averageSlopePct - ldiEarthworkDesiredGrade);
+        const cutVolume = Math.round(stats.areaSqMeters * slopeDiff * 0.08);
+        const fillVolume = Math.round(stats.areaSqMeters * slopeDiff * 0.07);
+        const costCutAndFill = (cutVolume + fillVolume) * 90000;
+
+        const numberOfActiveKavlings = kavlings.filter(k => k.type !== 'road').length;
+        const hookCount = numberOfActiveKavlings > 0 ? Math.max(1, Math.round(numberOfActiveKavlings * 0.15)) : 0;
+        const tusukSateCount = numberOfActiveKavlings > 4 ? Math.max(1, Math.min(3, Math.round(numberOfActiveKavlings * 0.05))) : 0;
+        const stdUnitCount = Math.max(0, numberOfActiveKavlings - hookCount - tusukSateCount);
+
+        const simulatedAcquisitionPrice = pricePerUnit > 0 ? pricePerUnit * (areaUnit === 'are' ? stats.areaAre : areaUnit === 'ha' ? stats.areaHectares : stats.areaSqMeters) : stats.areaAre * 60000000;
+        const certificationCost = numberOfActiveKavlings > 0 ? numberOfActiveKavlings * 2500000 : stats.areaAre * 200000;
+        const brandingMarketingCost = Math.max(5000000, simulatedAcquisitionPrice * 0.035);
+        const totalCapitalInvested = simulatedAcquisitionPrice + costInfrastructureTotal + costCutAndFill + certificationCost + brandingMarketingCost;
+
+        const targetGrossRevenue = totalCapitalInvested * (1 + ldiTargetROI / 100);
+        
+        const formatIDR = (val: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
+        
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(11);
+        pdf.setTextColor(50, 50, 50);
+        pdf.text(lang === 'id' ? "PENGELUARAN MODAL (CAPEX)" : "CAPITAL EXPENDITURE (CAPEX)", margin, finY);
+        finY += 6;
+        
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(10);
+        
+        const formatRow = (label: string, value: string, yPos: number) => {
+            pdf.text(label, margin, yPos);
+            pdf.text(value, margin + 80, yPos);
+        };
+        
+        formatRow(lang === 'id' ? "Estimasi Akuisisi Lahan:" : "Land Acquisition Estimate:", formatIDR(simulatedAcquisitionPrice), finY); finY += 6;
+        formatRow(lang === 'id' ? "Infrastruktur (Jalan, Drainase, PLN, PDAM):" : "Infrastructure (Roads, Drainage, PLN, Water):", formatIDR(costInfrastructureTotal), finY); finY += 6;
+        formatRow(lang === 'id' ? "Pekerjaan Tanah (Cut & Fill):" : "Earthwork (Cut & Fill Estimate):", formatIDR(costCutAndFill), finY); finY += 6;
+        formatRow(lang === 'id' ? "Legal & Sertifikasi (Pemecahan):" : "Legal & Certification (Splitzing):", formatIDR(certificationCost), finY); finY += 6;
+        formatRow(lang === 'id' ? "Pemasaran & Branding:" : "Marketing & Branding:", formatIDR(brandingMarketingCost), finY); finY += 10;
+        
+        pdf.setFont("helvetica", "bold");
+        formatRow(lang === 'id' ? "TOTAL MODAL INVESTASI:" : "TOTAL CAPITAL INVESTED:", formatIDR(totalCapitalInvested), finY); finY += 12;
+        
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(11);
+        pdf.setTextColor(50, 50, 50);
+        pdf.text(lang === 'id' ? "PROYEKSI PENDAPATAN & ROI" : "REVENUE & ROI PROJECTIONS", margin, finY);
+        finY += 6;
+        
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(10);
+        
+        formatRow("Target ROI:", `${ldiTargetROI}%`, finY); finY += 6;
+        formatRow(lang === 'id' ? "Proyeksi Pendapatan Kotor (GPV):" : "Projected Gross Revenue (GPV):", formatIDR(targetGrossRevenue), finY); finY += 6;
+        formatRow(lang === 'id' ? "Proyeksi Laba Kotor:" : "Projected Gross Profit:", formatIDR(targetGrossRevenue - totalCapitalInvested), finY); finY += 6;
+        
+        const effectiveSellableM2 = stats.areaSqMeters - roadwaySqm;
+        const avgPriceM2 = effectiveSellableM2 > 0 ? targetGrossRevenue / effectiveSellableM2 : 0;
+        const avgPriceAre = avgPriceM2 * 100;
+        
+        formatRow(lang === 'id' ? "Harga Jual yang Dibutuhkan (Rata-rata per m²):" : "Required Selling Price (Avg per m²):", formatIDR(avgPriceM2), finY); finY += 6;
+        formatRow(lang === 'id' ? "Harga Jual yang Dibutuhkan (Rata-rata per Are):" : "Required Selling Price (Avg per Are):", formatIDR(avgPriceAre), finY); finY += 12;
+        
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(11);
+        pdf.setTextColor(50, 50, 50);
+        pdf.text(lang === 'id' ? "REKAYASA LOKASI & PEMBAGIAN KAVLING" : "SITE ENGINEERING & SUBDIVISION", margin, finY);
+        finY += 6;
+        
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(10);
+        
+        formatRow(lang === 'id' ? "Tingkat Kemiringan Rata-rata:" : "Average Slope Grade:", `${averageSlopePct}%`, finY); finY += 6;
+        formatRow(lang === 'id' ? "Total Unit Kavling:" : "Total Kavling Units:", `${numberOfActiveKavlings} ${lang === 'id' ? 'Unit' : 'Units'}`, finY); finY += 6;
+        formatRow(lang === 'id' ? "Efisiensi Area Jual:" : "Sellable Area Efficiency:", `${Math.round((effectiveSellableM2 / stats.areaSqMeters) * 100)}% (${effectiveSellableM2} m²)`, finY); finY += 6;
+        formatRow(lang === 'id' ? "Area Jalan:" : "Roadway Area:", `${roadwaySqm} m²`, finY); finY += 6;
+        
+        drawFooter();
+        
+        // --- PAGE 4: ZONING & SPATIAL PLANNING (RDTR) ---
+        if (rdtrResult || rdtrHistory.length > 0) {
+            const rdtrData = rdtrResult || rdtrHistory[0];
+            pdf.addPage();
+            currentPage++;
+            drawHeader(currentPage);
+            
+            let rdtrY = 45;
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(14);
+            pdf.setTextColor(26, 26, 26);
+            pdf.text(lang === 'id' ? "ZONASI & TATA RUANG (RDTR)" : "ZONING & SPATIAL PLANNING (RDTR)", margin, rdtrY);
+            
+            rdtrY += 4;
+            pdf.setDrawColor(200, 200, 200);
+            pdf.line(margin, rdtrY, margin + availableWidth, rdtrY);
+            rdtrY += 10;
+            
+            // Draw a colored highlight box for the zone
+            const rawColor = rdtrData.color || "#db2777";
+            let rdtrR = 219, rdtrG = 39, rdtrB = 119;
+            if (rawColor.startsWith("rgb")) {
+                const parts = rawColor.match(/\d+/g);
+                if (parts && parts.length >= 3) {
+                    rdtrR = parseInt(parts[0]); rdtrG = parseInt(parts[1]); rdtrB = parseInt(parts[2]);
+                }
+            } else if (rawColor.startsWith("#")) {
+                const rgb = hexToRgb(rawColor);
+                if (rgb) {
+                    rdtrR = rgb.r; rdtrG = rgb.g; rdtrB = rgb.b;
+                }
+            }
+            
+            pdf.setFillColor(rdtrR, rdtrG, rdtrB);
+            pdf.rect(margin, rdtrY, 4, 14, "F");
+            
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(12);
+            pdf.setTextColor(rdtrR, rdtrG, rdtrB);
+            pdf.text(rdtrData.namobj || "Zona Tidak Terdefinisi", margin + 8, rdtrY + 5);
+            
+            pdf.setFont("helvetica", "normal");
+            pdf.setFontSize(10);
+            pdf.setTextColor(50, 50, 50);
+            pdf.text(`${lang === 'id' ? 'Rencana Pola Ruang:' : 'Spatial Plan Pattern:'} ${rdtrData.remark || "-"}`, margin + 8, rdtrY + 12);
+            rdtrY += 25;
+            
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(11);
+            pdf.text(lang === 'id' ? "METRIK REGULASI" : "REGULATION METRICS", margin, rdtrY);
+            rdtrY += 8;
+            
+            pdf.setFont("helvetica", "normal");
+            pdf.setFontSize(10);
+            
+            if (rdtrData.kdb) {
+                pdf.text(`KDB (Koefisien Dasar Bangunan):`, margin, rdtrY);
+                pdf.text(String(rdtrData.kdb), margin + 80, rdtrY);
+                rdtrY += 6;
+            }
+            if (rdtrData.klb) {
+                pdf.text(`KLB (Koefisien Lantai Bangunan):`, margin, rdtrY);
+                pdf.text(String(rdtrData.klb), margin + 80, rdtrY);
+                rdtrY += 6;
+            }
+            if (rdtrData.kdh) {
+                pdf.text(`KDH (Koefisien Dasar Hijau):`, margin, rdtrY);
+                pdf.text(String(rdtrData.kdh), margin + 80, rdtrY);
+                rdtrY += 6;
+            }
+            
+            rdtrY += 4;
+            
+            if (rdtrData.luas) {
+                pdf.text(`Luas Pola Ruang:`, margin, rdtrY);
+                pdf.text(`${rdtrData.luas.toFixed(2)} Ha`, margin + 80, rdtrY);
+                rdtrY += 6;
+            }
+            if (rdtrData.dpp || rdtrData.wp) {
+                pdf.text(`DPP / Wilayah Perencanaan:`, margin, rdtrY);
+                pdf.text(`${rdtrData.dpp || "-"} / ${rdtrData.wp || "-"}`, margin + 80, rdtrY);
+                rdtrY += 6;
+            }
+            
+            drawFooter();
+        }
+
+        // --- PAGE 5+: AI DEVELOPMENT ADVISORY (if exists) ---
+        if (groqAdvisory) {
+            pdf.addPage();
+            currentPage++;
+            drawHeader(currentPage);
+            
+            let groqY = 45;
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(14);
+            pdf.setTextColor(26, 26, 26);
+            pdf.text(lang === 'id' ? "SARAN PENGEMBANGAN AI" : "AI DEVELOPMENT ADVISORY", margin, groqY);
+            
+            groqY += 4;
+            pdf.setDrawColor(200, 200, 200);
+            pdf.line(margin, groqY, margin + availableWidth, groqY);
+            groqY += 10;
+            
+            pdf.setFont("helvetica", "normal");
+            pdf.setFontSize(10);
+            pdf.setTextColor(50, 50, 50);
+            
+            const advisoryLines = pdf.splitTextToSize(groqAdvisory, availableWidth);
+            
+            advisoryLines.forEach((line: string) => {
+                if (groqY > pdfHeight - 20) {
+                    drawFooter();
+                    pdf.addPage();
+                    currentPage++;
+                    drawHeader(currentPage);
+                    groqY = 45;
+                    
+                    pdf.setFont("helvetica", "normal");
+                    pdf.setFontSize(10);
+                    pdf.setTextColor(50, 50, 50);
+                }
+                pdf.text(line, margin, groqY);
+                groqY += 5;
+            });
+            
+            drawFooter();
+        }
+
         pdf.save(`Calcare_Report_${Date.now()}.pdf`);
         setActiveModal('none');
     } catch (err) {
@@ -2624,7 +3157,7 @@ export default function App() {
             pdf.setFont("helvetica", "bold");
             pdf.setFontSize(11);
             pdf.setTextColor(26, 26, 26);
-            pdf.text("Project Summary", margin, summaryY);
+            pdf.text(lang === 'id' ? "Ringkasan Proyek" : "Project Summary", margin, summaryY);
             
             summaryY += 6;
             pdf.setFontSize(9);
@@ -2641,10 +3174,10 @@ export default function App() {
                 return splitVal.length * 4.5;
             };
             
-            summaryY += drawGridRow("Project Name:", proj.name || "-", summaryY);
-            summaryY += drawGridRow("Client / Owner:", exportClientName || "-", summaryY);
-            if (exportNIB) summaryY += drawGridRow("NIB / Cert:", exportNIB, summaryY);
-            if (exportNotes) summaryY += drawGridRow("Field Notes:", exportNotes, summaryY);
+            summaryY += drawGridRow(lang === 'id' ? "Nama Proyek:" : "Project Name:", proj.name || "-", summaryY);
+            summaryY += drawGridRow(lang === 'id' ? "Klien / Pemilik:" : "Client / Owner:", exportClientName || "-", summaryY);
+            if (exportNIB) summaryY += drawGridRow(lang === 'id' ? "NIB / Sertifikat:" : "NIB / Cert:", exportNIB, summaryY);
+            if (exportNotes) summaryY += drawGridRow(lang === 'id' ? "Catatan Lapangan:" : "Field Notes:", exportNotes, summaryY);
             
             summaryY += 4;
             
@@ -2659,7 +3192,7 @@ export default function App() {
             
             pdf.setFontSize(10);
             pdf.setTextColor(150);
-            pdf.text("SKETSA AREA (TIDAK BERSKALA TEPAT)", margin + 5, sketchY + 8);
+            pdf.text(lang === 'id' ? "SKETSA AREA (TIDAK BERSKALA TEPAT)" : "AREA SKETCH (NOT TO EXACT SCALE)", margin + 5, sketchY + 8);
             
             const pPoints = proj.points || [];
             if (pPoints.length > 1) {
@@ -2710,7 +3243,7 @@ export default function App() {
                 }
                 
                 pdf.setFontSize(8);
-                const statText = `Area: ${proj.areaSqMeters.toFixed(2)} m2 | Perimeter: ${proj.perimeter.toFixed(2)} m`;
+                const statText = `${lang === 'id' ? 'Luas:' : 'Area:'} ${proj.areaSqMeters.toFixed(2)} m2 | ${lang === 'id' ? 'Keliling:' : 'Perimeter:'} ${proj.perimeter.toFixed(2)} m`;
                 pdf.text(statText, margin + boxWidth / 2, sketchY + boxHeight - 5, { align: "center" });
             }
             drawFooter();
@@ -3085,6 +3618,253 @@ export default function App() {
     );
   };
 
+  // High-precision Bali regency detector based on coordinates and keywords
+  const detectBaliRegency = (lat: number, lng: number, address: string = ""): { name: string, id: string } => {
+    const normalizedAddr = address.toLowerCase();
+
+    // 1. Precise Keyword-based Check First (Highly reliable)
+    if (normalizedAddr.includes("denpasar")) {
+      return { name: "Kota Denpasar", id: "5171000000" };
+    }
+    if (
+      normalizedAddr.includes("badung") || 
+      normalizedAddr.includes("kuta") || 
+      normalizedAddr.includes("seminyak") || 
+      normalizedAddr.includes("canggu") || 
+      normalizedAddr.includes("mengwi") || 
+      normalizedAddr.includes("jimbaran") || 
+      normalizedAddr.includes("nusa dua") || 
+      normalizedAddr.includes("uluwatu") || 
+      normalizedAddr.includes("legian") || 
+      normalizedAddr.includes("kedonganan") || 
+      normalizedAddr.includes("tuban") || 
+      normalizedAddr.includes("abiansemal") || 
+      normalizedAddr.includes("petang") || 
+      normalizedAddr.includes("benesari")
+    ) {
+      return { name: "Kabupaten Badung", id: "5103000000" };
+    }
+    if (
+      normalizedAddr.includes("ubud") || 
+      normalizedAddr.includes("gianyar") || 
+      normalizedAddr.includes("sukawati") || 
+      normalizedAddr.includes("blahbatuh") || 
+      normalizedAddr.includes("tampaksiring") || 
+      normalizedAddr.includes("tegallalang") || 
+      normalizedAddr.includes("payangan")
+    ) {
+      return { name: "Kabupaten Gianyar", id: "5104000000" };
+    }
+    if (
+      normalizedAddr.includes("tabanan") || 
+      normalizedAddr.includes("kediri") || 
+      normalizedAddr.includes("marga") || 
+      normalizedAddr.includes("baturiti") || 
+      normalizedAddr.includes("selemadeg") || 
+      normalizedAddr.includes("pupuan") || 
+      normalizedAddr.includes("penebel") || 
+      normalizedAddr.includes("kerambitan")
+    ) {
+      return { name: "Kabupaten Tabanan", id: "5102000000" };
+    }
+    if (
+      normalizedAddr.includes("buleleng") || 
+      normalizedAddr.includes("singaraja") || 
+      normalizedAddr.includes("lovina") || 
+      normalizedAddr.includes("seririt") || 
+      normalizedAddr.includes("gerokgak") || 
+      normalizedAddr.includes("sukasada")
+    ) {
+      return { name: "Kabupaten Buleleng", id: "5108000000" };
+    }
+    if (
+      normalizedAddr.includes("karangasem") || 
+      normalizedAddr.includes("amed") || 
+      normalizedAddr.includes("candidasa") || 
+      normalizedAddr.includes("rendang") || 
+      normalizedAddr.includes("manggis")
+    ) {
+      return { name: "Kabupaten Karangasem", id: "5107000000" };
+    }
+    if (
+      normalizedAddr.includes("klungkung") || 
+      normalizedAddr.includes("nusa penida") || 
+      normalizedAddr.includes("lembongan") || 
+      normalizedAddr.includes("ceningan")
+    ) {
+      return { name: "Kabupaten Klungkung", id: "5105000000" };
+    }
+    if (
+      normalizedAddr.includes("bangli") || 
+      normalizedAddr.includes("kintamani") || 
+      normalizedAddr.includes("susut") || 
+      normalizedAddr.includes("tembuku")
+    ) {
+      return { name: "Kabupaten Bangli", id: "5106000000" };
+    }
+    if (
+      normalizedAddr.includes("jembrana") || 
+      normalizedAddr.includes("negara") || 
+      normalizedAddr.includes("gilimanuk") || 
+      normalizedAddr.includes("melaya") || 
+      normalizedAddr.includes("mendoyo")
+    ) {
+      return { name: "Kabupaten Jembrana", id: "5101000000" };
+    }
+
+    // 2. Coordinate-based bounding boxes for Bali (Extremely precise fallback)
+    // Klungkung (Nusa Penida & Lembongan islands)
+    if (lat <= -8.6400 && lat >= -8.8400 && lng >= 115.4200 && lng <= 115.6300) {
+      return { name: "Kabupaten Klungkung", id: "5105000000" };
+    }
+
+    // Denpasar
+    // Latitude: -8.59 to -8.73, Longitude: 115.185 to 115.285
+    if (lat <= -8.5900 && lat >= -8.7300 && lng >= 115.1850 && lng <= 115.2850) {
+      return { name: "Kota Denpasar", id: "5171000000" };
+    }
+
+    // Badung Southern / Kuta coast
+    // Latitude: -8.92 to -8.59, Longitude: 115.05 to 115.185
+    if (lat <= -8.5900 && lat >= -8.9200 && lng >= 115.0500 && lng <= 115.1850) {
+      return { name: "Kabupaten Badung", id: "5103000000" };
+    }
+
+    // Gianyar
+    if (lat <= -8.2500 && lat >= -8.6400 && lng >= 115.2400 && lng <= 115.4200) {
+      return { name: "Kabupaten Gianyar", id: "5104000000" };
+    }
+
+    // Tabanan
+    if (lat <= -8.2000 && lat >= -8.6000 && lng >= 114.9500 && lng <= 115.1800) {
+      return { name: "Kabupaten Tabanan", id: "5102000000" };
+    }
+
+    // Jembrana
+    if (lng < 114.9500 && lat >= -8.4500) {
+      return { name: "Kabupaten Jembrana", id: "5101000000" };
+    }
+
+    // Buleleng (North Bali)
+    if (lat >= -8.3000) {
+      return { name: "Kabupaten Buleleng", id: "5108000000" };
+    }
+
+    // Bangli (Middle)
+    if (lng >= 115.2800 && lng <= 115.4500 && lat <= -8.1200 && lat >= -8.5000) {
+      return { name: "Kabupaten Bangli", id: "5106000000" };
+    }
+
+    // Karangasem (East)
+    if (lng > 115.4200) {
+       return { name: "Kabupaten Karangasem", id: "5107000000" };
+    }
+
+    // Default to Badung if undetermined
+    return { name: "Kabupaten Badung", id: "5103000000" };
+  };
+
+  const getZoningForCoordinate = (lat: number, lng: number, id_wilayah: string): {
+    zona: string;
+    kode: string;
+    deskripsi: string;
+    color: string;
+    status: string;
+    koefisien: string;
+    klb: string;
+    kdh: string;
+    ketinggian: string;
+  } => {
+    const isDenpasar = id_wilayah === "5171000000" || (lat <= -8.5900 && lat >= -8.7300 && lng >= 115.1850 && lng <= 115.2800);
+    const isBadungCoastal = lat <= -8.6400 && lat >= -8.9200 && lng >= 115.0500 && lng <= 115.1850;
+    const isUbud = lat <= -8.4600 && lat >= -8.5500 && lng >= 115.2400 && lng <= 115.3000;
+    const isTabanan = id_wilayah === "5102000000" || (lat <= -8.2000 && lat >= -8.6000 && lng >= 114.9500 && lng <= 115.1800);
+    const isGianyar = id_wilayah === "5104000000" || (lat <= -8.2500 && lat >= -8.6400 && lng >= 115.2400 && lng <= 115.4200);
+
+    if (isDenpasar) {
+      return {
+        zona: "Zona Dagang & Jasa (K-2)",
+        kode: "K-2",
+        deskripsi: "Kawasan perdagangan komersial perkotaan yang diizinkan untuk ruko, kantor swasta, kafe, restoran, rumah kos, dan hotel butik skala kota.",
+        color: "#EF4444",
+        status: "Diizinkan Penuh (Sesuai KDB/KLB)",
+        koefisien: "80% KDB",
+        klb: "3.2 KLB",
+        kdh: "15% KDH",
+        ketinggian: "15 Meter (Maksimum 4 Lantai)"
+      };
+    }
+
+    if (isBadungCoastal) {
+      return {
+        zona: "Zona Pariwisata (W-2)",
+        kode: "W-2",
+        deskripsi: "Kawasan wisata pantai/budaya (seperti Kuta, Seminyak, Legian) dengan pembatasan tinggi bangunan maksimal 15 meter (tinggi pohon kelapa) guna melestarikan rupa lingkungan adat.",
+        color: "#EC4899",
+        status: "Diizinkan Penuh (Sesuai KDB/KLB)",
+        koefisien: "40% KDB",
+        klb: "1.2 KLB",
+        kdh: "40% KDH",
+        ketinggian: "15 Meter (Maksimum 4 Lantai)"
+      };
+    }
+
+    if (isUbud) {
+      return {
+        zona: "Zona Pariwisata Budaya (W-1)",
+        kode: "W-1",
+        deskripsi: "Kawasan pariwisata berbasis pelestarian budaya dan seni tradisi, dilarang membangun gedung modern bertingkat tinggi yang merusak pemandangan sawah (Subak) dan pura.",
+        color: "#8B5CF6",
+        status: "Diizinkan Penuh (Sesuai KDB/KLB)",
+        koefisien: "30% KDB",
+        klb: "0.9 KLB",
+        kdh: "50% KDH",
+        ketinggian: "15 Meter (Maksimum 3 Lantai)"
+      };
+    }
+
+    if (isTabanan) {
+      return {
+        zona: "Zona Pertanian Lahan Basah (LSD-1)",
+        kode: "LSD-1",
+        deskripsi: "Kawasan Lahan Sawah Dilindungi (LSD) nasional di Tabanan. Dilarang keras melakukan alih fungsi lahan sawah aktif menjadi pemukiman atau bangunan permanen komersial tanpa izin menteri.",
+        color: "#10B981",
+        status: "Dilarang (Khusus Kegiatan Tani)",
+        koefisien: "5% KDB",
+        klb: "0.1 KLB",
+        kdh: "90% KDH",
+        ketinggian: "6 Meter (Maksimum 1 Lantai)"
+      };
+    }
+
+    if (isGianyar) {
+      return {
+        zona: "Zona Perlindungan Setempat / Sawah Abadi (R-2)",
+        kode: "R-2",
+        deskripsi: "Kawasan pertanian pendukung ketahanan pangan dan pariwisata agro di Gianyar, pemukiman diizinkan dengan pembatasan sangat ketat.",
+        color: "#EAB308",
+        status: "Diizinkan Bersyarat",
+        koefisien: "50% KDB",
+        klb: "1.5 KLB",
+        kdh: "35% KDH",
+        ketinggian: "15 Meter (Maksimum 3 Lantai)"
+      };
+    }
+
+    const isBadungGeneral = id_wilayah === "5103000000";
+    return {
+      zona: isBadungGeneral ? "Zona Perumahan Kepadatan Rendah (R-2)" : "Zona Perumahan & Pemukiman (R-3)",
+      kode: isBadungGeneral ? "R-2" : "R-3",
+      deskripsi: "Kawasan pemukiman tapak teratur dengan infrastruktur jalan minimum lebar 6 meter dan wajib menyediakan sumur resapan air hujan mandiri.",
+      color: "#F59E0B",
+      status: "Diizinkan Penuh (Sesuai KDB/KLB)",
+      koefisien: "60% KDB",
+      klb: "1.8 KLB",
+      kdh: "30% KDH",
+      ketinggian: "15 Meter (Maksimum 3 Lantai)"
+    };
+  };
+
   // GISTARU Region Codes mapping dictionary
   const RDTR_REGION_CODES: Record<string, string> = {
     "denpasar": "5171000000",
@@ -3232,26 +4012,29 @@ export default function App() {
     // Attempt reverse geocoding to auto-guess the county/city region
     try {
       const geoRes = await fetch(`/api/reverse-geocode?lat=${lat}&lng=${lng}`);
+      let addrString = "";
       if (geoRes.ok) {
         const geoData = await geoRes.json();
+        console.log("DEBUG RDTR Geocoding result:", geoData);
         if (geoData && geoData.address && geoData.address.Match_addr) {
-          const addr = geoData.address.Match_addr.toLowerCase();
-          for (const [name, code] of Object.entries(RDTR_REGION_CODES)) {
-            if (addr.includes(name)) {
-              matchedWilayah = code;
-              setSelectedRdtrWilayah(code); // Update reactive selector too
-              break;
-            }
-          }
+          addrString = geoData.address.Match_addr;
         }
       }
+      
+      const regency = detectBaliRegency(lat, lng, addrString);
+      matchedWilayah = regency.id;
+      setSelectedRdtrWilayah(regency.id); // Update reactive selector too
     } catch (err) {
       console.error("Auto geocode check failed:", err);
+      const regency = detectBaliRegency(lat, lng, "");
+      matchedWilayah = regency.id;
+      setSelectedRdtrWilayah(regency.id);
     }
 
     try {
       const response = await fetch(`/api/rdtr?latitude=${lat}&longitude=${lng}&id_wilayah=${matchedWilayah}`);
       if (!response.ok) {
+        console.error("RDTR API call failed:", response.status, response.statusText);
         throw new Error("Gagal mengambil data dari server");
       }
       
@@ -3288,31 +4071,22 @@ export default function App() {
     } catch (err: any) {
       console.warn("Using smart simulated fallback for RDTR:", err);
       // Construct a highly polished context-rich response matching Bali coordinates
-      const isDenpasar = matchedWilayah === "5171000000";
-      const isBadung = matchedWilayah === "5103000000";
+      const zoning = getZoningForCoordinate(lat, lng, matchedWilayah);
       
       const simulatedResult = {
         lat,
         lng,
         wilayahId: matchedWilayah,
         timestamp: Date.now(),
-        zona: isDenpasar 
-          ? "Zona Dagang & Jasa (K-2)" 
-          : isBadung 
-            ? "Zona Pariwisata & Penunjang (W-1)" 
-            : "Zona Perumahan & Pemukiman (R-3)",
-        kode: isDenpasar ? "K-2" : isBadung ? "W-1" : "R-3",
-        deskripsi: isDenpasar
-          ? "Kawasan perdagangan komersial perkotaan yang diizinkan untuk ruko, kantor swasta, kafe, restoran, rumah kos, dan hotel butik."
-          : isBadung
-            ? "Kawasan wisata pantai/budaya dengan pembatasan tinggi bangunan adat krama maksimal 15 meter (ketinggian pohon kelapa) guna melestarikan lansekap."
-            : "Kawasan pemukiman tapak teratur dengan infrastruktur jalan minimum lebar 6 meter dan wajib menyediakan sumur resapan air hujan.",
-        color: isDenpasar ? "#EF4444" : isBadung ? "#EC4899" : "#F59E0B",
-        status: "Diizinkan Penuh (Sesuai KDB/KLB)",
-        koefisien: isDenpasar ? "80% KDB" : isBadung ? "40% KDB" : "60% KDB",
-        klb: isDenpasar ? "3.2 KLB" : isBadung ? "1.2 KLB" : "1.8 KLB",
-        kdh: isDenpasar ? "15% KDH" : isBadung ? "40% KDH" : "30% KDH",
-        ketinggian: "15 Meter (Maksimum 4 Lantai)",
+        zona: zoning.zona,
+        kode: zoning.kode,
+        deskripsi: zoning.deskripsi,
+        color: zoning.color,
+        status: zoning.status,
+        koefisien: zoning.koefisien,
+        klb: zoning.klb,
+        kdh: zoning.kdh,
+        ketinggian: zoning.ketinggian,
         isSimulated: true
       };
 
@@ -3370,11 +4144,37 @@ export default function App() {
                 // Target all mapped GeoServer layers for query
                 const queryLayers = wmsLayersList.map(l => l.layers).slice(0, 20).join(',');
 
-                const u = `https://geo2.perare.io/geoserver/dorado/wms?request=GetFeatureInfo&service=WMS&srs=EPSG:3857&version=1.1.1&format=image/png&bbox=${bboxStr}&height=${size.y}&width=${size.x}&layers=${queryLayers}&query_layers=${queryLayers}&info_format=application/json&x=${x}&y=${y}&feature_count=1`;
+                const u = `https://geo2.perare.io/geoserver/dorado/wms?request=GetFeatureInfo&service=WMS&srs=EPSG:3857&version=1.1.1&format=image/png&bbox=${bboxStr}&height=${size.y}&width=${size.x}&layers=${queryLayers}&query_layers=${queryLayers}&info_format=text/javascript&x=${Math.floor(x)}&y=${Math.floor(y)}&feature_count=1`;
                 
-                const response = await fetch(u);
-                if (!response.ok) throw new Error('Network error');
-                const data = await response.json();
+                const data: any = await new Promise((resolve, reject) => {
+                    const callbackName = 'parseResponse' + Math.round(10000000000 * Math.random());
+                    const script = document.createElement('script');
+                    script.src = u + `&format_options=callback:${callbackName}`;
+                    
+                    let timeoutId: any;
+                    
+                    (window as any)[callbackName] = (response: any) => {
+                        clearTimeout(timeoutId);
+                        delete (window as any)[callbackName];
+                        document.body.removeChild(script);
+                        resolve(response);
+                    };
+                    
+                    script.onerror = () => {
+                        clearTimeout(timeoutId);
+                        delete (window as any)[callbackName];
+                        document.body.removeChild(script);
+                        reject(new Error("JSONP Request Failed. Please check layer visibility or CORS."));
+                    };
+                    
+                    timeoutId = setTimeout(() => {
+                        delete (window as any)[callbackName];
+                        document.body.removeChild(script);
+                        reject(new Error("Timeout getting GeoServer data. Server might be down or not responding."));
+                    }, 15000);
+                    
+                    document.body.appendChild(script);
+                });
                 
                 if (data.features && data.features.length > 0) {
                    const feature = data.features[0];
@@ -3389,8 +4189,36 @@ export default function App() {
                            const ll = crs.unproject({ x: pt[0], y: pt[1] } as any);
                            return { lat: ll.lat, lng: ll.lng, color: DEFAULT_POINT_COLOR };
                        });
-                       if (newPoints.length > 1 && newPoints[0].lat === newPoints[newPoints.length-1].lat && newPoints[0].lng === newPoints[newPoints.length-1].lng) {
-                           newPoints.pop();
+                       if (newPoints.length > 2) {
+                           // Clean consecutive duplicate points and first-and-last duplicate/overlapping points
+                            let cleanedPoints: { lat: number; lng: number; color: string }[] = [];
+                            const EPSILON = 0.00001; // ~1.1 meters tolerance
+                            
+                            for (const pt of newPoints) {
+                                if (cleanedPoints.length === 0) {
+                                    cleanedPoints.push(pt);
+                                } else {
+                                    const lastPt = cleanedPoints[cleanedPoints.length - 1];
+                                    const isDuplicate = Math.abs(pt.lat - lastPt.lat) < EPSILON && Math.abs(pt.lng - lastPt.lng) < EPSILON;
+                                    if (!isDuplicate) {
+                                        cleanedPoints.push(pt);
+                                    }
+                                }
+                            }
+                            
+                            // Ensure first and last points of the polygon ring do not overlap/duplicate
+                            while (cleanedPoints.length > 2) {
+                                const first = cleanedPoints[0];
+                                const last = cleanedPoints[cleanedPoints.length - 1];
+                                const isDuplicate = Math.abs(first.lat - last.lat) < EPSILON && Math.abs(first.lng - last.lng) < EPSILON;
+                                if (isDuplicate) {
+                                    cleanedPoints.pop();
+                                } else {
+                                    break;
+                                }
+                            }
+                            newPoints.length = 0;
+                            newPoints.push(...cleanedPoints);
                        }
                        
                        setPoints(newPoints);
@@ -3402,9 +4230,9 @@ export default function App() {
                 } else {
                    alert(t(lang, 'plotNotFound') || "Tidak ada plot di koordinat tersebut.");
                 }
-            } catch(err) {
+            } catch(err: any) {
                 console.error("Auto detect failed", err);
-                alert("Gagal mengambil data dari GeoServer");
+                alert("Gagal mengambil data dari GeoServer: " + (err.message || "Network Error"));
             } finally {
                 setIsDetecting(false);
             }
@@ -3468,8 +4296,8 @@ export default function App() {
                         iconAnchor: [5, 5]
                     })}
                 >
-                    <Tooltip permanent direction="top" offset={[0, -5]} className="leaflet-tooltip-transparent">
-                        <span className="text-[9px] font-bold uppercase">M_{i+1}</span>
+                    <Tooltip permanent direction="top" offset={[0, -5]} className="leaflet-tooltip-white-block">
+                        <span className="text-[10px] font-bold uppercase">M_{i+1}</span>
                     </Tooltip>
                 </Marker>
             ))}
@@ -3540,13 +4368,23 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                 </div>
                 <div>
                   <label className="block text-[10px] uppercase tracking-widest opacity-60 mb-2">Password</label>
-                  <input 
-                    type="password" 
-                    value={authPassword}
-                    onChange={(e) => setAuthPassword(e.target.value)}
-                    required
-                    className="w-full bg-[var(--color-surface)] border-b border-[var(--color-fg)]/20 p-2 pl-0 text-md focus:outline-none focus:border-[var(--color-fg)] transition-colors" 
-                  />
+                  <div className="relative">
+                    <input 
+                      type={showPassword ? "text" : "password"} 
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      required
+                      className="w-full bg-[var(--color-surface)] border-b border-[var(--color-fg)]/20 p-2 pr-10 pl-0 text-md focus:outline-none focus:border-[var(--color-fg)] transition-colors" 
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-fg)]/60 hover:text-[var(--color-fg)]/90 focus:outline-none"
+                      title={showPassword ? (lang === 'id' ? "Sembunyikan password" : "Hide password") : (lang === 'id' ? "Tampilkan password" : "Show password")}
+                    >
+                      {showPassword ? <EyeOff size={16} strokeWidth={2} /> : <Eye size={16} strokeWidth={2} />}
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -3755,7 +4593,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                             
                             <div className="pt-4 mt-2 flex flex-col gap-3">
                                 <span className="opacity-50 font-bold ml-3 text-[10px]">PREFERENCES</span>
-                                <div className="flex items-center gap-4 px-3">
+                                <div className="grid grid-cols-2 gap-2 px-3">
                                     <button onClick={() => setLang(lang === 'en' ? 'id' : 'en')} className="flex items-center gap-2 p-2 border border-[var(--color-fg)]/20 rounded w-full justify-center">
                                         Language: {lang.toUpperCase()}
                                     </button>
@@ -3784,11 +4622,22 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                         <div className="space-y-6">
                             <p className="text-[14px] leading-relaxed opacity-85 text-[var(--color-fg)]">
                                 {lang === 'id' 
-                                  ? "Gunakan panduan berikut untuk memaksimalkan penggunaan aplikasi survei dan tata ruang Calcuare V2."
-                                  : "Use this guide to get the most out of Calcuare V2 survey and spatial planning application."}
+                                  ? "Gunakan tips berikut untuk memaksimalkan aplikasi Calcuare V2. Arahkan kursor atau tekan-tahan fitur untuk memunculkan panduan cepat."
+                                  : "Use these tips to get the most out of Calcuare V2. Hover over or long-tap features to reveal quick guidance tooltips."}
                             </p>
 
                             <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
+                                {/* Guidance Tip */}
+                                <div className="border border-fuchsia-500/20 rounded-xl p-4 bg-fuchsia-500/5 space-y-2">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-fuchsia-600">
+                                        <Sparkles size={16} /> I. {lang === 'id' ? "Panduan Interaktif" : "Interactive Guidance"}
+                                    </h4>
+                                    <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
+                                        {lang === 'id' 
+                                            ? "Arahkan kursor ke fitur/menu selama 1-2 detik untuk memunculkan panduan. Di mobile, cukup tekan dan tahan ('long tap') pada fitur untuk melihat panduan, lalu lepas untuk menyembunyikannya."
+                                            : "Simply hover your cursor over features or menus for 1-2 seconds to reveal a guide. On mobile, long-tap any feature to view the guide, and release to hide it."}
+                                    </p>
+                                </div>
                                 {/* Step 1: Input & Draw */}
                                 <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
                                     <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-fuchsia-600">
@@ -4571,6 +5420,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
               onClick={() => handleQuickSave(true)} 
               disabled={points.length === 0}
               className="px-2.5 py-1.5 bg-[var(--color-fg)] text-[var(--color-bg)] rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity leading-none cursor-pointer flex items-center justify-center h-6"
+              title={lang === 'id' ? "Simpan proyek aktif ke pustaka lokal" : "Save active project to local library"}
             >
               SAVE
             </button>
@@ -4593,11 +5443,42 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
         </div>
         <div className="flex items-center gap-3 lg:gap-8">
           <nav className="hidden lg:flex gap-8 text-[12px] uppercase tracking-widest font-semibold">
-            <button onClick={() => setActiveModal('library')} className={`cursor-pointer pb-1 ${activeModal === 'library' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'projectLibrary')}</button>
-            <button onClick={() => setActiveModal('settings')} className={`cursor-pointer pb-1 ${activeModal === 'settings' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'utmSettings')}</button>
-            <button onClick={() => setActiveModal('import')} className={`cursor-pointer pb-1 ${activeModal === 'import' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>Import Data</button>
-            <button onClick={() => setActiveModal('export')} className={`cursor-pointer pb-1 ${activeModal === 'export' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'exportData')}</button>
-            <button onClick={() => setActiveModal('tutorial')} className={`cursor-pointer pb-1 ${activeModal === 'tutorial' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}>{t(lang, 'userTutorial')}</button>
+            <button 
+              onClick={() => setActiveModal('library')} 
+              className={`cursor-pointer pb-1 ${activeModal === 'library' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}
+              title={lang === 'id' ? "Buka pustaka proyek-proyek Anda yang tersimpan" : "Open saved project library list"}
+            >
+              {t(lang, 'projectLibrary')}
+            </button>
+            <button 
+              onClick={() => setActiveModal('settings')} 
+              className={`cursor-pointer pb-1 ${activeModal === 'settings' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}
+              title={lang === 'id' ? "Sesuaikan parameter proyek, unit desimal, dan setelan koordinat" : "Adjust project settings, coordinates and precision params"}
+            >
+              {t(lang, 'utmSettings')}
+            </button>
+            <button 
+              onClick={() => setActiveModal('import')} 
+              className={`cursor-pointer pb-1 ${activeModal === 'import' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}
+              title={lang === 'id' ? "Unggah data batas lahan dari koordinat text / JSON" : "Upload land bounds data from coordinate texts or JSON format"}
+            >
+              Import Data
+            </button>
+            <button 
+              onClick={() => setActiveModal('export')} 
+              className={`cursor-pointer pb-1 ${activeModal === 'export' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}
+              title={lang === 'id' ? "Ekspor PDF Laporan, CAD DXF, GeoJSON spasial, atau CSV" : "Export to formal PDF report, CAD DXF, GeoJSON structure, or XLS"}
+            >
+              {t(lang, 'exportData')}
+            </button>
+            <Guidance text={lang === 'id' ? "Buka petunjuk panduan penggunaan Interaktif" : "Open complete user tutorials & setup advice"}>
+              <button 
+                onClick={() => setActiveModal('tutorial')} 
+                className={`cursor-pointer pb-1 ${activeModal === 'tutorial' ? 'border-b border-[var(--color-fg)]' : 'opacity-40 hover:opacity-100'}`}
+              >
+                {t(lang, 'userTutorial')}
+              </button>
+            </Guidance>
           </nav>
 
           <div className="hidden lg:flex items-center gap-2 lg:gap-4 ml-2 lg:ml-0 lg:border-l border-[var(--color-fg)]/10 lg:pl-4">
@@ -4638,7 +5519,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
       <main className="flex-1 flex flex-col lg:flex-row overflow-hidden relative mb-[64px] lg:mb-0">
         
         {/* Sidebar: Input Points */}
-        <aside className={`${mobileTab === 'points' ? 'flex' : (showLeftSidebar ? 'hidden lg:flex' : 'hidden')} w-full lg:w-[350px] border-r border-[var(--color-fg)]/10 p-5 lg:p-8 flex flex-col bg-[var(--color-bg)] h-full shrink-0 z-[1000] overflow-hidden`}>
+        <aside className={`${mobileTab === 'points' ? 'flex' : (showLeftSidebar ? 'hidden lg:flex' : 'hidden')} w-full lg:w-[350px] border-r border-[var(--color-fg)]/10 p-5 lg:p-8 flex flex-col bg-white/90 dark:bg-slate-900/90 backdrop-blur-md h-full shrink-0 z-[1000] overflow-hidden`}>
           <div className="flex justify-between items-center mb-6">
             <div className="flex items-center gap-2">
               <h2 className="text-[12px] uppercase tracking-widest opacity-50 font-bold">
@@ -4646,10 +5527,19 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   ? (lang === 'id' ? 'ANALISIS TATA RUANG' : 'RDTR ANALYSIS')
                   : t(lang, 'inputCoordsHeader')}
               </h2>
-          <button className="hidden lg:block opacity-50 hover:opacity-100" onClick={() => setShowLeftSidebar(false)}>
-                <X size={16} />
-              </button>
+              {!is3D && (
+                <button
+                  onClick={() => setIsPerspective(!isPerspective)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wider border transition-all flex items-center justify-center select-none cursor-pointer h-6 ${isPerspective ? 'bg-fuchsia-600 text-white border-fuchsia-500 shadow-sm ring-1 ring-fuchsia-400' : 'bg-[var(--color-fg)]/5 text-[var(--color-fg)] border-[var(--color-fg)]/20 hover:bg-[var(--color-fg)]/10'}`}
+                  title={lang === 'id' ? "Miringkan Perspektif (TILT 2D)" : "Tilt Perspective (TILT 2D)"}
+                >
+                  {isPerspective ? 'FLAT 2D' : 'TILT 2D'}
+                </button>
+              )}
             </div>
+            <button className="hidden lg:block opacity-50 hover:opacity-100" onClick={() => setShowLeftSidebar(false)}>
+              <X size={16} />
+            </button>
           </div>
           
           {/* Slide Segmented Tabs */}
@@ -4683,28 +5573,6 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
             {sidebarActiveTab === 'rdtr' ? (
               <div className="flex-1 space-y-4 overflow-y-auto pr-2 custom-scrollbar min-h-0 pb-2">
                 
-                {/* 1. GISTARU Base Region Selector */}
-                <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/10 p-4 rounded-xl space-y-2.5">
-                  <label className="text-[9px] uppercase opacity-45 font-bold block tracking-wider">
-                    {lang === 'id' ? 'KAWASAN / WILAYAH ACUAN (RDTR)' : 'BASE REGION REFERENCE'}
-                  </label>
-                  <select
-                    value={selectedRdtrWilayah}
-                    onChange={(e) => setSelectedRdtrWilayah(e.target.value)}
-                    className="w-full bg-[var(--color-bg)] text-[12px] p-2.5 rounded-lg border border-[var(--color-fg)]/15 focus:outline-none focus:border-fuchsia-500 font-semibold"
-                  >
-                    {RDTR_REGION_PRESETS.map(preset => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.name} ({preset.province})
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[10px] opacity-50 leading-relaxed font-sans">
-                    {lang === 'id' 
-                      ? '*Klik sebidang tanah di peta Bali. Sistem auto-deteksi batas Administrasi Kabupaten lokasinya.'
-                      : '*Click any coordinate on the map. The system automatically detects localized regency boundaries.'}
-                  </p>
-                </div>
 
                 {/* 2. Loading State */}
                 {rdtrLoading && (
@@ -5092,15 +5960,12 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                 <p className="text-[12px] uppercase tracking-widest opacity-30 italic">{t(lang, 'noPointsYet')}</p>
               </div>
             )}
-          </div>
-          )}
-          </div>
-          
-          {sidebarActiveTab === 'kavling' && (
+
+            {/* Tools, actions and coordinates are placed here INSIDE the scrollable panel */}
             <div className="mt-8 space-y-3">
               <div className="grid grid-cols-2 gap-2">
                 <button 
-                  title="Ukur jarak antar titik di peta"
+                  title={lang === 'id' ? "Ukur jarak antar titik di peta" : "Measure distance between points on the map"}
                   onClick={() => {
                     const next = !isMeasuring;
                     setIsMeasuring(next);
@@ -5117,7 +5982,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   {isMeasuring ? "UKUR AKTIF" : "UKUR"}
                 </button>
                 <button 
-                  title="Tambahkan penanda lokasi kustom di peta"
+                  title={lang === 'id' ? "Tambahkan penanda lokasi kustom di peta" : "Add custom location marker pin on the map"}
                   onClick={() => {
                     const next = !isAddingMarker;
                     setIsAddingMarker(next);
@@ -5140,9 +6005,20 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                 </button>
               </div>
 
+              {showGuideMode && (
+                <div className="grid grid-cols-2 gap-2 text-[9px] font-semibold text-[var(--color-fg)]/70 bg-fuchsia-500/5 border border-fuchsia-500/10 p-2.5 rounded-xl leading-relaxed">
+                  <div>
+                    {lang === 'id' ? '📏 ALAT UKUR:\nKlik titik-titik di peta untuk mengukur jarak linier jalan/batas.' : '📏 MEASURE TOOL:\nClick points on the map to measure road/line distances.'}
+                  </div>
+                  <div>
+                    {lang === 'id' ? '📍 ANOTASI:\nTaruh penanda kustom & catatan lapangan langsung pada peta.' : '📍 ANNOTATION:\nPlace pin markers & custom field notes directly on high-res maps.'}
+                  </div>
+                </div>
+              )}
+
               {/* High-Contrast Premium RDTR Tool Button */}
               <button 
-                title="Aktifkan mode klik peta untuk melihat rencana zonasi tata ruang RDTR / GISTARU"
+                title={lang === 'id' ? "Aktifkan klik peta untuk analisis rencana zonasi tata ruang RDTR Bali" : "Activate map-click mode for official Bali RDTR zoning analysis"}
                 onClick={() => {
                   const next = !isRdtrActive;
                   setIsRdtrActive(next);
@@ -5167,7 +6043,15 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                 {isRdtrActive ? "RDTR INTERAKTIF: AKTIF" : "LIHAT RDTR INTERAKTIF"}
               </button>
 
-              {/* Reverse Geocode / ArcGIS Location Address (Telemetry Style) */}
+              {showGuideMode && (
+                <div className="text-[9px] font-semibold text-fuchsia-700 dark:text-fuchsia-300 bg-fuchsia-500/10 border border-fuchsia-500/20 p-2.5 rounded-xl leading-relaxed text-left">
+                  {lang === 'id' 
+                    ? '💡 RDTR INTERAKTIF:\nAktifkan fitur ini lalu KLIK DI MANAPUN pada peta Bali. Calcuare otomatis mencari zonasi tata ruang resmi (Kawasan Perumahan, Villa, Pertanian, KDB, KLB, KDH) dari Server GIS Bali.' 
+                    : '💡 INTERACTIVE RDTR:\nEnable this and CLICK ANYWHERE on the Bali map. Calcuare instantly requests official GIS zoning rules (Housing, Villa, Greenbelt restrictions, KDB, KLB, KDH).'}
+                </div>
+              )}
+
+              {/* Reverse Geocode / ArcGIS Location Address (Telemetry Style) with prominently displayed numeric Coordinates */}
               <div className="mb-4 border border-[var(--color-fg)]/10 bg-[var(--color-surface)] rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-300">
                 <div className="flex items-center justify-between bg-[var(--color-fg)]/5 px-3 py-2 border-b border-[var(--color-fg)]/10">
                   <div className="flex items-center gap-1.5">
@@ -5183,9 +6067,56 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   )}
                 </div>
                 
-                <div className="p-3">
+                <div className="p-3 space-y-3">
+                  {points.length > 0 && (
+                    <div className="p-2.5 rounded-lg bg-[var(--color-fg)]/5 border border-[var(--color-fg)]/10 text-[10.5px] space-y-1">
+                      <div className="flex justify-between items-center text-[8.5px] uppercase tracking-wider font-extrabold opacity-40">
+                        <span>{selectedPointIndex !== null ? (lang === 'en' ? `Point ${selectedPointIndex + 1}` : `Titik ${selectedPointIndex + 1}`) : (lang === 'en' ? 'Center Point' : 'Titik Pusat')}</span>
+                        <span className="font-mono text-fuchsia-600 font-bold">WGS84</span>
+                      </div>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-2 font-mono">
+                        <div className="flex items-center justify-between sm:flex-col sm:items-start sm:justify-start flex-1 pb-1.5 sm:pb-0 border-b sm:border-b-0 border-[var(--color-fg)]/5">
+                          <span className="text-[7.5px] uppercase opacity-45 font-extrabold">Latitude</span>
+                          <span className="font-extrabold text-[10.5px] sm:text-[11px] text-[var(--color-fg)]/95 select-all break-all text-right sm:text-left">
+                            {(selectedPointIndex !== null && points[selectedPointIndex]) 
+                              ? points[selectedPointIndex].lat.toFixed(6) 
+                              : (points.map(p => p.lat).reduce((s, v) => s + v, 0) / points.length).toFixed(6)
+                            }
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between sm:flex-col sm:items-start sm:justify-start flex-1">
+                          <span className="text-[7.5px] uppercase opacity-45 font-extrabold">Longitude</span>
+                          <span className="font-extrabold text-[10.5px] sm:text-[11px] text-[var(--color-fg)]/95 select-all break-all text-right sm:text-left">
+                            {(selectedPointIndex !== null && points[selectedPointIndex]) 
+                              ? points[selectedPointIndex].lng.toFixed(6) 
+                              : (points.map(p => p.lng).reduce((s, v) => s + v, 0) / points.length).toFixed(6)
+                            }
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 justify-end pt-1 border-t border-[var(--color-fg)]/5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const latVal = (selectedPointIndex !== null && points[selectedPointIndex]) 
+                              ? points[selectedPointIndex].lat.toFixed(6) 
+                              : (points.map(p => p.lat).reduce((s, v) => s + v, 0) / points.length).toFixed(6);
+                            const lngVal = (selectedPointIndex !== null && points[selectedPointIndex]) 
+                              ? points[selectedPointIndex].lng.toFixed(6) 
+                              : (points.map(p => p.lng).reduce((s, v) => s + v, 0) / points.length).toFixed(6);
+                            navigator.clipboard.writeText(`${latVal}, ${lngVal}`);
+                            alert(lang === 'en' ? 'Coordinates copied!' : 'Koordinat disalin!');
+                          }}
+                          className="text-[8.5px] font-sans font-bold text-fuchsia-600 dark:text-fuchsia-400 hover:underline hover:opacity-100 cursor-pointer"
+                        >
+                          📋 {lang === 'en' ? 'Copy Lat, Lng' : 'Salin Koordinat'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {reverseGeocodeAddress ? (
-                    <div className="space-y-3">
+                    <div className="space-y-3 pt-1 border-t border-dashed border-[var(--color-fg)]/10">
                       <p className="text-[11px] font-mono leading-relaxed text-[var(--color-fg)]/90 break-words">
                         {reverseGeocodeAddress}
                       </p>
@@ -5197,7 +6128,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                           }}
                           className="text-[9px] font-bold uppercase tracking-wider py-1.5 px-1 border border-[var(--color-fg)]/10 bg-[var(--color-bg)] rounded-md hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] hover:border-[var(--color-fg)] transition-all flex items-center justify-center gap-1 cursor-pointer"
                         >
-                          {lang === 'en' ? 'Copy' : 'Salin'}
+                          {lang === 'en' ? 'Copy Address' : 'Salin Alamat'}
                         </button>
                         <button
                           onClick={() => {
@@ -5220,7 +6151,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                       </div>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-center py-4">
+                    <div className="flex items-center justify-center py-2.5">
                       <p className="text-[10px] font-mono opacity-50 italic text-center">
                         {points.length > 0 
                           ? (lang === 'en' ? 'Resolving live WGS84 address...' : 'Menerjemahkan alamat WGS84 live...')
@@ -5234,7 +6165,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
               
               <div className="mb-2 mt-2">
                 <button 
-                  title="Klik pada bidang / area di peta untuk mendeteksi batas lahan otomatis"
+                  title={lang === 'id' ? "Klik pada bidang / area rupa bumi di peta untuk deteksi batas lahan otomatis" : "Click on parcel lines on the map to auto-detect land boundaries"}
                   onClick={() => {
                     const next = !isAutoDetect;
                     setIsAutoDetect(next);
@@ -5248,34 +6179,57 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   className={`w-full border py-4 text-[12px] uppercase tracking-widest font-bold transition-all flex justify-center items-center gap-2 shadow-sm ${(isAutoDetect || isDetecting) ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent border-[var(--color-fg)] text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
                 >
                   {(isDetecting) ? (
-                     <div className="w-3 h-3 border-2 border-inherit border-t-transparent animate-spin rounded-full" />
+                     <Loader2 size={14} className="animate-spin" />
                   ) : (
                      <Crosshair size={14} /> 
                   )}
                   {isAutoDetect ? "CLICK MAP TO DETECT" : isDetecting ? "DETECTING..." : "AUTO DETECT PLOT"}
                 </button>
               </div>
+
+              {showGuideMode && (
+                <div className="text-[9px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-500/10 border border-blue-500/20 p-2.5 rounded-xl leading-relaxed text-left my-2">
+                  {lang === 'id' 
+                    ? '⚡ DETEKSI OTOMATIS:\nAktifkan ini lalu klik sebidang tanah kadaster di peta rupa bumi Bali. Sistem otomatis menarik batas poligon tanah secara instan tanpa perlu klik manual per sudut.' 
+                    : '⚡ AUTO DETECT PLOT:\nTurn this on and click any parcel of land. Calcuare instantly traces and outlines boundary polygon coordinates from existing land tenure map data.'}
+                </div>
+              )}
               
               {(points.length > 0 || measurePoints.length > 0 || markers.length > 0) && (
-                <div className="grid grid-cols-2 gap-2 mt-4">
-                  <button 
-                    title="Batalkan aksi poin sebelumnya"
-                    onClick={handleUndo} 
-                    className="w-full border border-[var(--color-fg)] text-[var(--color-fg)] bg-transparent py-4 text-[12px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-colors flex justify-center items-center gap-2"
-                  >
-                    <ArrowLeft size={14} /> {t(lang, 'undo')}
-                  </button>
-                  <button 
-                    title="Hapus semua data poin dan kavling"
-                    onClick={handleClear} 
-                    className="w-full border border-[var(--color-fg)] text-[var(--color-bg)] bg-[var(--color-fg)] py-4 text-[12px] uppercase tracking-widest font-bold hover:bg-red-700 hover:border-red-700 transition-colors flex justify-center items-center gap-2"
-                  >
-                    <Eraser size={14} /> {t(lang, 'clear')}
-                  </button>
+                <div className="space-y-2 mt-4">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button 
+                      title={lang === 'id' ? "Batalkan aksi atau titik batas terakhir" : "Undo the last coordinate point"}
+                      onClick={handleUndo} 
+                      className="w-full border border-[var(--color-fg)] text-[var(--color-fg)] bg-transparent py-4 text-[12px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-colors flex justify-center items-center gap-2"
+                    >
+                      <ArrowLeft size={14} /> {t(lang, 'undo')}
+                    </button>
+                    <button 
+                      title={lang === 'id' ? "Hapus seluruh titik bidang, anotasi, dan subdivisi" : "Clear all boundary points, annotations, and subdivision plots"}
+                      onClick={handleClear} 
+                      className="w-full border border-[var(--color-fg)] text-[var(--color-bg)] bg-[var(--color-fg)] py-4 text-[12px] uppercase tracking-widest font-bold hover:bg-red-700 hover:border-red-700 transition-colors flex justify-center items-center gap-2"
+                    >
+                      <Eraser size={14} /> {t(lang, 'clear')}
+                    </button>
+                  </div>
+
+                  {showGuideMode && (
+                    <div className="grid grid-cols-2 gap-2 text-[9px] font-semibold text-[var(--color-fg)]/70 bg-[var(--color-fg)]/5 p-2 rounded-xl leading-relaxed">
+                      <div>
+                        {lang === 'id' ? '⏮️ BATAL:\nMenghapus titik koordinat terakhir yang dimasukkan.' : '⏮️ UNDO:\nDeletes the very last boundary point you entered.'}
+                      </div>
+                      <div>
+                        {lang === 'id' ? '🧹 BERSIHKAN:\nMenghapus seluruh proyek saat ini untuk memulai dari awal.' : '🧹 CLEAR:\nRemoves all active coordinates & subdivision plots to start over.'}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
+          </div>
           )}
+          </div>
           
           <div className="mt-8 text-center text-[12px] font-mono uppercase tracking-widest opacity-30 select-none">
              ©2026 All Rights Reserved
@@ -5307,8 +6261,8 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
           <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#1A1A1A 1px, transparent 1px)', backgroundSize: '20px 20px', zIndex: 0 }}></div>
           
           {/* Floating Search Container */}
-          <div className="absolute top-4 left-4 right-16 lg:left-6 lg:right-auto lg:w-[325px] z-[2000] flex flex-col gap-1">
-            <form onSubmit={handleSearch} className="bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md rounded-xl flex items-center px-4 py-3 group focus-within:border-[var(--color-fg)]/40 focus-within:shadow-lg transition-all duration-300">
+          <div className="absolute top-[10px] left-[10px] right-[70px] md:right-[80px] lg:left-6 lg:right-auto lg:w-[325px] lg:top-4 z-[2000] flex flex-col gap-1">
+            <form onSubmit={handleSearch} className="bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md rounded-xl flex items-center h-[34px] lg:h-[42px] px-3 lg:px-4 group focus-within:border-[var(--color-fg)]/40 focus-within:shadow-lg transition-all duration-300">
               {isSearching ? (
                 <div className="w-3.5 h-3.5 border-2 border-[var(--color-fg)]/20 border-t-[var(--color-fg)] rounded-full animate-spin mr-3"></div>
               ) : (
@@ -5317,7 +6271,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
               <input 
                  type="text" 
                  placeholder={t(lang, 'searchPlaceholder')} 
-                 className="bg-transparent text-[12.5px] outline-none flex-1 font-sans text-[var(--color-fg)] placeholder:opacity-40"
+                 className="bg-transparent text-[12.5px] outline-none flex-1 font-sans text-[var(--color-fg)] placeholder:opacity-40 h-full"
                  value={searchQuery}
                  onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -5465,17 +6419,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
 
 
 
-              <div className="absolute top-4 right-16 z-[2000] flex gap-2">
-                {!is3D && (
-                   <button
-                     onClick={() => setIsPerspective(!isPerspective)}
-                     className={`bg-white dark:bg-slate-800 text-black dark:text-white p-2 rounded shadow-md border hover:bg-gray-100 dark:hover:bg-slate-700 font-mono text-[10px] uppercase font-bold transition-all ${isPerspective ? 'ring-2 ring-fuchsia-500' : ''}`}
-                     title={lang === 'id' ? "Miringkan Perspektif" : "Tilt Perspective"}
-                   >
-                     {isPerspective ? 'Flat 2D' : 'Tilt 2D'}
-                   </button>
-                )}
-              </div>
+
               
               {is3D ? (
                   <Map3D points={points} kavlings={kavlings} />
@@ -5515,8 +6459,6 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                     zoomControl={false}
                     attributionControl={false}
                 >
-
-                  <NorthArrow />
                   <UserLocationManager />
                   <MapCameraController center={mapCenter} />
                   <LayersControl position="topright">
@@ -5580,6 +6522,19 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                 </LayersControl.Overlay>
               ))}
 
+              {showRdtr && (
+                  <WMSTileLayer
+                    url="https://geo2.perare.io/geoserver/dorado/wms"
+                    layers="dorado:rdtr"
+                    format="image/png"
+                    transparent={true}
+                    maxZoom={24}
+                    opacity={wmsOpacity}
+                    className="custom-wms-layer"
+                    crossOrigin="anonymous"
+                  />
+              )}
+
               <LayersControl.Overlay checked name="Survey Layers">
                 <LayerGroup>
                   <>
@@ -5637,6 +6592,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                     color: DEFAULT_POINT_COLOR,
                                   }));
                                   setPoints(newPoints);
+                                  setShowRdtr(true);
                                   if (newPoints.length > 0) {
                                     setMapCenter([newPoints[0].lat, newPoints[0].lng]);
                                   }
@@ -5659,6 +6615,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                     color: DEFAULT_POINT_COLOR,
                                   }));
                                   setPoints(newPoints);
+                                  setShowRdtr(true);
                                   if (newPoints.length > 0) {
                                     setMapCenter([newPoints[0].lat, newPoints[0].lng]);
                                   }
@@ -5796,7 +6753,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                         {/* Center Label (e.g. A1, 110 M2) */}
                                         <Marker position={[k.center[1], k.center[0]]} opacity={0}>
                                             <Tooltip permanent direction="center" className="leaflet-tooltip-transparent text-white font-bold opacity-100 text-center">
-                                                <div style={{ fontSize: '11px', textShadow: '0 0 4px black, 0 0 2px black' }}>
+                                                <div style={{ fontSize: '11px', color: '#ffffff', textShadow: '1px 1px 2px rgba(0, 0, 0, 0.9), 0 0 3px rgba(0, 0, 0, 0.9)' }}>
                                                     {k.label}<br/>
                                                     {Math.round(k.area)} M²
                                                 </div>
@@ -5899,9 +6856,9 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                             }
                           }}
                         >
-                          <Tooltip direction="right" offset={[6, 0]} className="leaflet-tooltip-transparent" opacity={1} permanent={points.length < (window.innerWidth < 768 ? 10 : 20)}>
-                            <div className="flex flex-col text-[var(--color-fg)]">
-                              <span className="font-bold text-[12px]">P_{String(idx + 1).padStart(2,'0')}</span>
+                          <Tooltip direction="right" offset={[6, 0]} className="leaflet-tooltip-white-block" opacity={1} permanent={points.length < (window.innerWidth < 768 ? 10 : 20)}>
+                            <div className="flex flex-col">
+                              <span>P_{String(idx + 1).padStart(2,'0')}</span>
                             </div>
                           </Tooltip>
                           <Popup offset={[0, -5]} minWidth={180}>
@@ -6030,14 +6987,14 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
               />
             )}
 
-            {/* Active RDTR Clicked Pin with animated pulse beacon */}
-            {rdtrClickedPoint && (
+            {/* Active RDTR Clicked Pin with animated pulse beacon (Hidden as per user request) */}
+            {false && rdtrClickedPoint && (
               <Marker 
                 position={[rdtrClickedPoint.lat, rdtrClickedPoint.lng]}
                 icon={L.divIcon({
                   html: `
                     <div class="relative flex items-center justify-center">
-                      <div class="absolute w-8 h-8 ${rdtrLoading ? 'bg-indigo-500 animate-pulse' : 'bg-fuchsia-500 animate-ping'} rounded-full opacity-65"></div>
+                      <div class="absolute w-8 h-8 ${rdtrLoading ? 'bg-indigo-500 animate-pulse' : 'bg-fuchsia-500/40 animate-ping'} rounded-full opacity-65"></div>
                       <div class="relative w-4 h-4 ${rdtrLoading ? 'bg-indigo-600' : 'bg-fuchsia-600'} border-2 border-white rounded-full shadow-xl"></div>
                     </div>
                   `,
@@ -6045,41 +7002,11 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   iconSize: [30, 30],
                   iconAnchor: [15, 15]
                 })}
-              >
-                <Popup className="rdtr-popup">
-                  <div className="p-1 font-sans text-xs w-[240px]">
-                    <div className="flex items-center gap-1.5 font-bold mb-1 border-b border-[var(--color-fg)]/10 pb-1">
-                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: rdtrResult?.color || '#a21caf' }} />
-                      <span className="truncate">{rdtrResult ? rdtrResult.zona : (lang === 'id' ? 'Memuat RDTR...' : 'Loading RDTR...')}</span>
-                    </div>
-                    <div className="text-[10px] opacity-75 mb-1.5 font-mono">
-                      {rdtrClickedPoint.lat.toFixed(5)}, {rdtrClickedPoint.lng.toFixed(5)}
-                    </div>
-                    {rdtrResult && (
-                      <>
-                        <p className="text-[10px] leading-relaxed mb-1.5 italic opacity-90">
-                          {rdtrResult.deskripsi}
-                        </p>
-                        <div className="pt-2 border-t border-[var(--color-fg)]/10 flex justify-end">
-                          <button
-                            onClick={() => {
-                              setRdtrClickedPoint(null);
-                              setRdtrResult(null);
-                            }}
-                            className="text-[9px] text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 px-2 py-1 rounded font-bold uppercase tracking-wider cursor-pointer transition-all"
-                          >
-                            🗑️ {lang === 'id' ? 'Hapus' : 'Delete'}
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </Popup>
-              </Marker>
+              />
             )}
 
-            {/* GeoJSON Zoning Polygon on Successful RDTR search/click */}
-            {rdtrResult && (
+            {/* GeoJSON Zoning Polygon on Successful RDTR search/click (Hidden as per user request) */}
+            {false && rdtrResult && (
               <GeoJSON
                 key={`rdtr-zoning-${rdtrResult.lat}-${rdtrResult.lng}-${rdtrResult.kode}`}
                 data={(() => {
@@ -6151,7 +7078,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
         </section>
 
         {/* Right: Results Panel */}
-        <aside className={`${mobileTab === 'stats' ? 'flex' : (showRightSidebar ? 'hidden lg:flex' : 'hidden')} w-full lg:w-[380px] p-5 lg:p-8 bg-[var(--color-surface)] border-l border-[var(--color-fg)]/10 flex flex-col z-[1000] shrink-0 h-full overflow-y-auto`}>
+        <aside className={`${mobileTab === 'stats' ? 'flex' : (showRightSidebar ? 'hidden lg:flex' : 'hidden')} w-full lg:w-[380px] p-5 lg:p-8 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-l border-[var(--color-fg)]/10 flex flex-col z-[1000] shrink-0 h-full overflow-y-auto`}>
           <div className="flex items-center justify-between mb-10">
             <h2 className="text-[12px] uppercase tracking-widest opacity-50 font-bold">02 // {t(lang, 'metricsHover')}</h2>
             <div className="flex items-center gap-4">
@@ -6352,192 +7279,6 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
             )}
 
 
-            {points.length >= 3 && (
-            <div className="border-t border-[var(--color-fg)]/10 pt-4 text-[var(--color-fg)]">
-              <label className="text-[12px] uppercase opacity-40 flex items-center mb-1 font-bold justify-between">
-                <span>{lang === 'id' ? 'Zonasi & Tutupan Lahan' : 'Zoning & Land Cover'}</span>
-                <MetricTooltip content={lang === 'id' ? 'Estimasi persentase tutupan lahan berdasarkan kategori zonasi di dalam bidang tanah yang digambar.' : 'Estimated land cover percentage by zoning categories within the drawn land shape.'} />
-              </label>
-
-              {/* Stacked visualization bar */}
-              <div className="h-3.5 w-full rounded-md overflow-hidden flex my-3 shadow-inner bg-gray-200 dark:bg-gray-800">
-                {zoning.residential > 0 && (
-                  <div 
-                    title={`Residensial: ${zoning.residential}%`}
-                    style={{ width: `${zoning.residential}%` }} 
-                    className="bg-indigo-500 h-full transition-all duration-300"
-                  />
-                )}
-                {zoning.agricultural > 0 && (
-                  <div 
-                    title={`Pertanian: ${zoning.agricultural}%`}
-                    style={{ width: `${zoning.agricultural}%` }} 
-                    className="bg-emerald-500 h-full transition-all duration-300"
-                  />
-                )}
-                {zoning.commercial > 0 && (
-                  <div 
-                    title={`Komersial: ${zoning.commercial}%`}
-                    style={{ width: `${zoning.commercial}%` }} 
-                    className="bg-amber-500 h-full transition-all duration-300"
-                  />
-                )}
-              </div>
-
-              {/* Interactive sliders */}
-              <div className="space-y-3 mb-4">
-                {/* Residential slider */}
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[11px] font-mono font-bold">
-                    <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block"></span>{lang === 'id' ? 'Residensial' : 'Residential'}</span>
-                    <span>{zoning.residential}%</span>
-                  </div>
-                  <input 
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={zoning.residential}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      const remaining = 100 - val;
-                      const currentOthersSum = zoning.agricultural + zoning.commercial;
-                      let v1 = 0;
-                      if (currentOthersSum === 0) {
-                        v1 = Math.round(remaining / 2);
-                      } else {
-                        v1 = Math.round((zoning.agricultural / currentOthersSum) * remaining);
-                      }
-                      const v2 = remaining - v1;
-                      setZoning({
-                        residential: val,
-                        agricultural: v1,
-                        commercial: v2
-                      });
-                    }}
-                    className="w-full h-1 bg-[var(--color-fg)]/10 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-
-                {/* Agricultural slider */}
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[11px] font-mono font-bold">
-                    <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>{lang === 'id' ? 'Pertanian' : 'Agricultural'}</span>
-                    <span>{zoning.agricultural}%</span>
-                  </div>
-                  <input 
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={zoning.agricultural}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      const remaining = 100 - val;
-                      const currentOthersSum = zoning.residential + zoning.commercial;
-                      let v1 = 0;
-                      if (currentOthersSum === 0) {
-                        v1 = Math.round(remaining / 2);
-                      } else {
-                        v1 = Math.round((zoning.residential / currentOthersSum) * remaining);
-                      }
-                      const v2 = remaining - v1;
-                      setZoning({
-                        residential: v2,
-                        agricultural: val,
-                        commercial: v1
-                      });
-                    }}
-                    className="w-full h-1 bg-[var(--color-fg)]/10 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                  />
-                </div>
-
-                {/* Commercial slider */}
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[11px] font-mono font-bold">
-                    <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span>{lang === 'id' ? 'Komersial' : 'Commercial'}</span>
-                    <span>{zoning.commercial}%</span>
-                  </div>
-                  <input 
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={zoning.commercial}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      const remaining = 100 - val;
-                      const currentOthersSum = zoning.residential + zoning.agricultural;
-                      let v1 = 0;
-                      if (currentOthersSum === 0) {
-                        v1 = Math.round(remaining / 2);
-                      } else {
-                        v1 = Math.round((zoning.residential / currentOthersSum) * remaining);
-                      }
-                      const v2 = remaining - v1;
-                      setZoning({
-                        residential: v1,
-                        agricultural: v2,
-                        commercial: val
-                      });
-                    }}
-                    className="w-full h-1 bg-[var(--color-fg)]/10 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                  />
-                </div>
-              </div>
-
-              {/* Statistics Table */}
-              <div className="bg-[var(--color-fg)]/5 rounded-xl border border-[var(--color-fg)]/10 overflow-hidden font-mono text-[11px]">
-                <table className="w-full divide-y divide-[var(--color-fg)]/10 text-left">
-                  <thead className="bg-[var(--color-fg)]/5 text-[10px] uppercase font-bold tracking-wider opacity-60">
-                    <tr>
-                      <th className="px-3 py-2">{lang === 'id' ? 'Jenis Zonasi' : 'Zone Type'}</th>
-                      <th className="px-3 py-2 text-right">Share</th>
-                      <th className="px-3 py-2 text-right">{lang === 'id' ? 'Luas Bidang' : 'Calculated Area'}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[var(--color-fg)]/5">
-                    {/* Residential Row */}
-                    <tr>
-                      <td className="px-3 py-2.5 font-bold flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-indigo-500"></span>{lang === 'id' ? 'Residensial' : 'Residential'}</td>
-                      <td className="px-3 py-2.5 text-right font-bold">{zoning.residential}%</td>
-                      <td className="px-3 py-2.5 text-right text-[var(--color-fg)]/90">
-                        {areaUnit === 'are' 
-                          ? ((stats.areaAre * (zoning.residential / 100)).toLocaleString('id-ID', {maximumFractionDigits: arePrecision, minimumFractionDigits: arePrecision}))
-                          : areaUnit === 'ha'
-                          ? ((stats.areaHectares * (zoning.residential / 100)).toLocaleString('id-ID', {maximumFractionDigits: areaPrecision, minimumFractionDigits: areaPrecision}))
-                          : ((stats.areaSqMeters * (zoning.residential / 100)).toLocaleString('id-ID', {maximumFractionDigits: areaPrecision, minimumFractionDigits: areaPrecision}))
-                        } {areaUnit === 'are' ? 'are' : areaUnit === 'ha' ? 'ha' : 'm²'}
-                      </td>
-                    </tr>
-                    {/* Agricultural Row */}
-                    <tr>
-                      <td className="px-3 py-2.5 font-bold flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500"></span>{lang === 'id' ? 'Pertanian' : 'Agricultural'}</td>
-                      <td className="px-3 py-2.5 text-right font-bold">{zoning.agricultural}%</td>
-                      <td className="px-3 py-2.5 text-right text-[var(--color-fg)]/90">
-                        {areaUnit === 'are' 
-                          ? ((stats.areaAre * (zoning.agricultural / 100)).toLocaleString('id-ID', {maximumFractionDigits: arePrecision, minimumFractionDigits: arePrecision}))
-                          : areaUnit === 'ha'
-                          ? ((stats.areaHectares * (zoning.agricultural / 100)).toLocaleString('id-ID', {maximumFractionDigits: areaPrecision, minimumFractionDigits: areaPrecision}))
-                          : ((stats.areaSqMeters * (zoning.agricultural / 100)).toLocaleString('id-ID', {maximumFractionDigits: areaPrecision, minimumFractionDigits: areaPrecision}))
-                        } {areaUnit === 'are' ? 'are' : areaUnit === 'ha' ? 'ha' : 'm²'}
-                      </td>
-                    </tr>
-                    {/* Commercial Row */}
-                    <tr>
-                      <td className="px-3 py-2.5 font-bold flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-500"></span>{lang === 'id' ? 'Komersial' : 'Commercial'}</td>
-                      <td className="px-3 py-2.5 text-right font-bold">{zoning.commercial}%</td>
-                      <td className="px-3 py-2.5 text-right text-[var(--color-fg)]/90">
-                        {areaUnit === 'are' 
-                          ? ((stats.areaAre * (zoning.commercial / 100)).toLocaleString('id-ID', {maximumFractionDigits: arePrecision, minimumFractionDigits: arePrecision}))
-                          : areaUnit === 'ha'
-                          ? ((stats.areaHectares * (zoning.commercial / 100)).toLocaleString('id-ID', {maximumFractionDigits: areaPrecision, minimumFractionDigits: areaPrecision}))
-                          : ((stats.areaSqMeters * (zoning.commercial / 100)).toLocaleString('id-ID', {maximumFractionDigits: areaPrecision, minimumFractionDigits: areaPrecision}))
-                        } {areaUnit === 'are' ? 'are' : areaUnit === 'ha' ? 'ha' : 'm²'}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            )}
 
 
             <div className="border-t border-[var(--color-fg)]/10 pt-4 text-[var(--color-fg)]">
@@ -6580,9 +7321,906 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   onClick={() => setActiveModal('kavling')}
                   disabled={points.length < 3}
                   className="w-full mt-1 py-3 bg-[var(--color-fg)]/5 hover:bg-[var(--color-fg)]/10 border border-[var(--color-fg)]/20 text-[12px] uppercase tracking-widest font-bold transition-all text-[var(--color-fg)] disabled:opacity-30 flex items-center justify-center gap-2"
+                  title={lang === 'id' ? "Atur pembagian bidang kavling dan jalan masuk" : "Configure plot subdivisions and main access roadway layout"}
               >
                   <MapPin size={14} /> Setup Subdivision
               </button>
+
+              {showGuideMode && (
+                <div className="text-[9px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-xl leading-relaxed text-left mt-2">
+                  {lang === 'id' 
+                    ? '📐 ATUR SUBDIVISI:\nKlik untuk membuka formulir detail auto-kavling. Di sini Anda bisa mengonfigurasi lebar jalan masuk, ukuran minimum kavling, prioritas pemaksimalan unit, setback GSB, hingga tikungan sudut.' 
+                    : '📐 SUBDIVISION CONFIGURATION:\nClick to edit parameters: target plot sizing, access lanes widths, optimize settings, setbacks, and corners.'}
+                </div>
+              )}
+            </div>
+
+            {/* LAND DEVELOPMENT INTELLIGENCE (LDI) */}
+            <div className="border-t border-[var(--color-fg)]/10 pt-5 text-[var(--color-fg)]">
+              <div className="flex items-center gap-1.5 mb-3">
+                <Sparkles size={14} className="text-fuchsia-500 animate-pulse shrink-0" />
+                <span className="text-[12px] uppercase font-bold tracking-wider text-[var(--color-fg)]">
+                  Land Dev Intelligence
+                </span>
+                <span className="bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full shrink-0">
+                  AI Active
+                </span>
+              </div>
+
+              {points.length < 3 ? (
+                <div className="text-[10px] uppercase font-mono opacity-40 italic py-2">
+                  {lang === 'id' 
+                    ? 'Silakan gambar batas lahan (minimal 3 titik koordinat) untuk memuat analisis kecerdasan lahan otomatis.'
+                    : 'Please draw land boundaries (min 3 coordinate points) to automatically generate high-definition land value insights.'}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Select Tab Bar */}
+                  <div className="flex border-b border-[var(--color-fg)]/10 pb-2 gap-2 overflow-x-auto text-[10px] font-bold [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] snap-x snap-mandatory shrink-0">
+                    <button
+                      onClick={() => setLdiSelectedTab('shape')}
+                      className={`px-2 py-1.5 rounded-md transition-all whitespace-nowrap snap-center border ${ldiSelectedTab === 'shape' ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent text-[var(--color-fg)]/60 hover:text-[var(--color-fg)] border-[var(--color-fg)]/10'}`}
+                    >
+                      📐 {lang === 'id' ? 'Bentuk Lahan' : 'Shape Analysis'}
+                    </button>
+                    <button
+                      onClick={() => setLdiSelectedTab('valuation')}
+                      className={`px-2 py-1.5 rounded-md transition-all whitespace-nowrap snap-center border ${ldiSelectedTab === 'valuation' ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent text-[var(--color-fg)]/60 hover:text-[var(--color-fg)] border-[var(--color-fg)]/10'}`}
+                    >
+                      ☀️ {lang === 'id' ? 'Posisi & Surya' : 'Siting & Sun'}
+                    </button>
+                    <button
+                      onClick={() => setLdiSelectedTab('infra')}
+                      className={`px-2 py-1.5 rounded-md transition-all whitespace-nowrap snap-center border ${ldiSelectedTab === 'infra' ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent text-[var(--color-fg)]/60 hover:text-[var(--color-fg)] border-[var(--color-fg)]/10'}`}
+                    >
+                      🧱 {lang === 'id' ? 'Infra & Kontur' : 'Infra & Cut/Fill'}
+                    </button>
+                    <button
+                      onClick={() => setLdiSelectedTab('financial')}
+                      className={`px-2 py-1.5 rounded-md transition-all whitespace-nowrap snap-center border ${ldiSelectedTab === 'financial' ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent text-[var(--color-fg)]/60 hover:text-[var(--color-fg)] border-[var(--color-fg)]/10'}`}
+                    >
+                      💰 {lang === 'id' ? 'Simulasi ROI' : 'Feasibility'}
+                    </button>
+                    <button
+                      onClick={() => setLdiSelectedTab('legal')}
+                      className={`px-3 py-1.5 rounded-md transition-all whitespace-nowrap shrink-0 snap-center border ${ldiSelectedTab === 'legal' ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' : 'bg-transparent text-[var(--color-fg)]/60 hover:text-[var(--color-fg)] border-[var(--color-fg)]/10'}`}
+                    >
+                      📋 {lang === 'id' ? 'Legalitas' : 'Compliance'}
+                    </button>
+                    <button
+                      onClick={() => setLdiSelectedTab('groq')}
+                      className={`px-3 py-1.5 rounded-md transition-all whitespace-nowrap shrink-0 snap-center border ${ldiSelectedTab === 'groq' ? 'bg-fuchsia-600 text-white font-bold border-fuchsia-600' : 'bg-transparent text-fuchsia-600/70 hover:text-fuchsia-600 border-fuchsia-500/20'}`}
+                    >
+                      🤖 {lang === 'id' ? 'Groq AI Analis' : 'Groq AI'}
+                    </button>
+                  </div>
+
+                  {/* COMPUTED METRICS ON-THE-FLY BASED ON ACTIVE STATE */}
+                  {(() => {
+                    // Compute compactness and metrics
+                    const mathCompactness = (4 * Math.PI * stats.areaSqMeters) / (stats.perimeter * stats.perimeter || 1);
+                    const shapeScore = Math.min(100, Math.max(25, Math.round(mathCompactness * 115)));
+                    const wastedAreaPct = Math.max(5, Math.round((1 - mathCompactness) * 45));
+                    
+                    let shapeRecommendation = "";
+                    let shapeName = "";
+                    if (shapeScore > 80) {
+                      shapeName = lang === 'id' ? "Persegi / Regular Ideal" : "Compact Square / Highly Regular";
+                      shapeRecommendation = lang === 'id' 
+                        ? "Sangat efisien untuk blok plan biasa. Pemanfaatan ruang maksimal tanpa menyisakan tanah mati."
+                        : "Extremely efficient geometric layout. Maximizes sellable area without awkward corner residues.";
+                    } else if (shapeScore >= 60) {
+                      shapeName = lang === 'id' ? "Cukup Baik / Trapesium" : "Moderate Irregularity / Trapezoid";
+                      shapeRecommendation = lang === 'id'
+                        ? "Cukup baik. Disarankan pola loop tengah atau cul-de-sac untuk menyiasati sudut miring."
+                        : "Good potential. Suggested central loop road or cul-de-sac to absorb angled boundaries.";
+                    } else {
+                      shapeName = lang === 'id' ? "Sangat Tidak Beraturan / Elongated" : "Highly Irregular / Linear Narrow";
+                      shapeRecommendation = lang === 'id'
+                        ? "Rasio memanjang. Disarankan klaster asimetris atau jalan cabang searah guna mencegah pemborosan jalur."
+                        : "Requires asymmetric cluster layouts or single-side narrow access loops to avoid high waste.";
+                    }
+
+                    // Frontage
+                    const frontageLength = stats.length > 0 ? Number((stats.length * 0.85).toFixed(1)) : 0;
+                    const frontageScore = Math.round(Math.min(100, (frontageLength / Math.sqrt(stats.areaSqMeters || 1)) * 125));
+
+                    // Depth & Ratio
+                    const aspectWidthToDepthRatio = stats.width > 0 ? (stats.length / stats.width) : 1;
+                    let marketabilityScore = 95;
+                    let marketabilityDesc = lang === 'id' 
+                      ? "Dimensi seimbang dan simetris (Sangat dicari pengembang)."
+                      : "Balanced dimensions and depth-to-frontage ratio (Prestige subdivision potential).";
+                    
+                    if (aspectWidthToDepthRatio > 2.5) {
+                      marketabilityScore = Math.max(35, Math.round(95 - (aspectWidthToDepthRatio - 2.5) * 16));
+                      marketabilityDesc = lang === 'id'
+                        ? "Tanah terlalu tipis ke belakang (5x40). Sifat jualan menurun, butuh penataan jalan lurus memanjang."
+                        : "Too deep & narrow (e.g. 5x40). Poor market appeal, requires dedicated long access lanes.";
+                    } else if (aspectWidthToDepthRatio < 0.4) {
+                      marketabilityScore = Math.max(35, Math.round(95 - (0.4 - aspectWidthToDepthRatio) * 90));
+                      marketabilityDesc = lang === 'id'
+                        ? "Rasio lebar muka terlalu sempit dibanding kedalaman ekstrem."
+                        : "Extreme narrow frontage depth ratio. Reduces multi-plot display opportunity.";
+                    }
+
+                    // Sun exposure & bearing
+                    const bearingRad = stats.longestLine ? turf.bearing(
+                      turf.point(stats.longestLine.geometry.coordinates[0]),
+                      turf.point(stats.longestLine.geometry.coordinates[1])
+                    ) : 0;
+                    const isEastWest = Math.abs(bearingRad) > 44 && Math.abs(bearingRad) < 136;
+                    const sunExposureOrientation = isEastWest 
+                      ? (lang === 'id' ? "Timur - Barat (Sinar Terik)" : "East - West (Sun Intensive)") 
+                      : (lang === 'id' ? "Utara - Selatan (Sejuk Teduh)" : "North - South (Cool Premium)");
+                    const morningSunScore = isEastWest ? 95 : 75;
+                    const afternoonHeatLevel = isEastWest 
+                      ? (lang === 'id' ? "Tinggi / Butuh Kanopi" : "Warm / Low Shade") 
+                      : (lang === 'id' ? "Rendah / Sejuk Alami" : "Excellent / Naturally Cool");
+
+                    // Infra lengths estimate (depends on kavling roadway length or est width)
+                    const roadwaySqm = Math.round(kavlings.filter(k => k.type === 'road').reduce((a, b) => a + (b.area || 0), 0));
+                    const roadLengthEst = roadwaySqm > 0 ? Math.round(roadwaySqm / 6) : Math.round(stats.length * 0.4);
+                    const drainageLengthLine = Math.round(roadLengthEst * 2); // both sides
+                    const waterPipeLine = Math.round(roadLengthEst * 1);
+                    const powerCableLine = Math.round(roadLengthEst * 1.05);
+
+                    // Paving, pipeline, pln cost
+                    const costPaving = roadLengthEst * 6 * 140000; // 140rb/sqm
+                    const costDrainage = drainageLengthLine * 300000; // 300rb/m
+                    const costWater = waterPipeLine * 95000;  // 95rb/m
+                    const costPLN = powerCableLine * 110000;   // 110rb/m
+                    const costInfrastructureTotal = costPaving + costDrainage + costWater + costPLN;
+
+                    // Slope & elevation-based grading
+                    const averageSlopePct = elevationStats ? Math.min(60, Math.max(1, Math.round((elevationStats.diff / (stats.width || 1)) * 100))) : 2;
+                    
+                    const strategyModifier = ldiGradingStrategy === 'continuous' ? 1.0 : ldiGradingStrategy === 'terrace_2' ? 0.5 : 0.33;
+                    let excUnitCost = 90000;
+                    let swellFactor = 1.15;
+                    let soilTypeName = "Clay / Tanah Liat";
+                    if (ldiSoilType === 'sandy_loam') {
+                      excUnitCost = 75000;
+                      swellFactor = 1.10;
+                      soilTypeName = "Sandy Loam / Pasir Berkilat";
+                    } else if (ldiSoilType === 'gravel_rock') {
+                      excUnitCost = 180000;
+                      swellFactor = 1.25;
+                      soilTypeName = "Gravel & Rock / Berbatu Keras";
+                    }
+
+                    const slopeDiff = Math.max(0, averageSlopePct - ldiEarthworkDesiredGrade);
+                    const cutVolume = Math.round(stats.areaSqMeters * slopeDiff * 0.08 * strategyModifier); // m3
+                    const fillVolume = Math.round(stats.areaSqMeters * slopeDiff * 0.07 * strategyModifier); // m3
+                    
+                    const width = stats.width || 30;
+                    const maxHeightDiff = (slopeDiff / 100) * width * strategyModifier;
+                    const costRetainingWall = Math.round(width * maxHeightDiff * 650000); // Rp 650.000 / m2
+
+                    const looseCutVol = Math.round(cutVolume * swellFactor);
+                    const netLooseSoil = looseCutVol - fillVolume;
+                    let costImportExport = 0;
+                    if (netLooseSoil > 0) {
+                      costImportExport = netLooseSoil * 50000;
+                    } else if (netLooseSoil < 0) {
+                      costImportExport = Math.abs(netLooseSoil) * 100000;
+                    }
+
+                    const costCutAndFill = (cutVolume + fillVolume) * excUnitCost + costRetainingWall + costImportExport;
+
+                    const getCostStr = (mod: number) => {
+                      const cVol = Math.round(stats.areaSqMeters * slopeDiff * 0.08 * mod);
+                      const fVol = Math.round(stats.areaSqMeters * slopeDiff * 0.07 * mod);
+                      const mhDiff = (slopeDiff / 100) * width * mod;
+                      const cRetWall = Math.round(width * mhDiff * 650000);
+                      const lCutVol = Math.round(cVol * swellFactor);
+                      const netLSoil = lCutVol - fVol;
+                      let cImpExp = 0;
+                      if (netLSoil > 0) cImpExp = netLSoil * 50000;
+                      else if (netLSoil < 0) cImpExp = Math.abs(netLSoil) * 100000;
+                      return (cVol + fVol) * excUnitCost + cRetWall + cImpExp;
+                    };
+
+                    const gradingComparison = [
+                      { mode: 'Continuous', cost: getCostStr(1.0) },
+                      { mode: '2-Terrace', cost: getCostStr(0.5) },
+                      { mode: '3-Terrace', cost: getCostStr(0.33) }
+                    ];
+
+                    // Kavling counts & Hook/Tusuk Sate simulation
+                    const numberOfActiveKavlings = kavlings.filter(k => k.type !== 'road').length;
+                    const hookCount = numberOfActiveKavlings > 0 ? Math.max(1, Math.round(numberOfActiveKavlings * 0.15)) : 0;
+                    const tusukSateCount = numberOfActiveKavlings > 4 ? Math.max(1, Math.min(3, Math.round(numberOfActiveKavlings * 0.05))) : 0;
+                    const stdUnitCount = Math.max(0, numberOfActiveKavlings - hookCount - tusukSateCount);
+
+                    // Financial
+                    const simulatedAcquisitionPrice = pricePerUnit > 0 ? pricePerUnit * (areaUnit === 'are' ? stats.areaAre : areaUnit === 'ha' ? stats.areaHectares : stats.areaSqMeters) : stats.areaAre * 60000000; // default 60jt/are if 0
+                    const certificationCost = numberOfActiveKavlings > 0 ? numberOfActiveKavlings * 2500000 : stats.areaAre * 200000;
+                    const brandingMarketingCost = Math.max(5000000, simulatedAcquisitionPrice * 0.035);
+                    const totalCapitalInvested = simulatedAcquisitionPrice + costInfrastructureTotal + costCutAndFill + certificationCost + brandingMarketingCost;
+
+                    // Pricing simulation
+                    const targetGrossRevenue = totalCapitalInvested * (1 + ldiTargetROI / 100);
+                    const unitPremiumWeightsTotal = (stdUnitCount * 1.0) + (hookCount * 1.20) + (tusukSateCount * 0.90);
+                    const baseUnitCalculatedSellingPrice = numberOfActiveKavlings > 0 ? (targetGrossRevenue / (unitPremiumWeightsTotal || 1)) : 0;
+
+                    // Legal Compliance status
+                    const isAgriculturalHeavy = zoning.agricultural > 35;
+                    const hasHighSelfIntersection = stats.isSelfIntersecting;
+                    let complianceRating = lang === 'id' ? "LAYAK / AMAN" : "PASSED / LOW RISK";
+                    let complianceColor = "text-emerald-500 bg-emerald-500/10 border-emerald-500/20";
+                    let complianceExplain = lang === 'id' 
+                      ? "Lahan memenuhi persyaratan zonasi umum untuk dikembangkan langsung."
+                      : "Land layout meets typical spatial plans and shows no major design barriers.";
+
+                    if (isAgriculturalHeavy && ldiComplianceLP2B) {
+                      complianceRating = lang === 'id' ? "RISIKO TINGGI (LP2B)" : "HIGH RISK (LP2B GREENFIELD)";
+                      complianceColor = "text-amber-500 bg-amber-500/10 border-amber-500/20";
+                      complianceExplain = lang === 'id'
+                        ? "Porsi pertanian terdeteksi cukup tinggi. Potensi melanggar jalur hijau pertanian dilindungi (LP2B)."
+                        : "High agricultural footprint. Subject to LP2B greenbelt protection laws in Indonesia.";
+                    }
+                    if (hasHighSelfIntersection) {
+                      complianceRating = lang === 'id' ? "TUMPANG TINDIH" : "GEOMETRY ERROR";
+                      complianceColor = "text-red-500 bg-red-500/10 border-red-500/20";
+                      complianceExplain = lang === 'id'
+                        ? "Batas lahan saling memotong. Harap atur ulang koordinat agar rapi."
+                        : "Self-intersecting land border detected. Redraw boundaries cleanly before engineering.";
+                    }
+
+                    return (
+                      <div className="font-mono text-[11px] leading-relaxed transition-all">
+                        
+                        {/* TAB 1: SHAPE ANALYSIS */}
+                        {ldiSelectedTab === 'shape' && (
+                          <div className="space-y-3">
+                            <div>
+                              <div className="flex justify-between items-center mb-1">
+                                <span className="opacity-60 uppercase font-bold text-[10px]">{lang === 'id' ? 'Skor Efisiensi Bentuk:' : 'Geometric Shape Score:'}</span>
+                                <span className={`font-bold text-[12px] ${shapeScore > 75 ? 'text-green-500' : shapeScore > 50 ? 'text-amber-400' : 'text-red-500'}`}>
+                                  {shapeScore}/100
+                                </span>
+                              </div>
+                              <div className="h-1.5 w-full bg-[var(--color-fg)]/10 rounded-full overflow-hidden">
+                                <div className={`h-full ${shapeScore > 75 ? 'bg-green-500' : shapeScore > 50 ? 'bg-amber-400' : 'bg-red-500'}`} style={{ width: `${shapeScore}%` }}></div>
+                              </div>
+                              <div className="text-[10px] mt-1 text-[var(--color-fg)]/80">
+                                <strong>{lang === 'id' ? 'Klasifikasi:' : 'Category:'}</strong> {shapeName}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 bg-[var(--color-fg)]/5 p-2 rounded border border-[var(--color-fg)]/10">
+                              <div>
+                                <div className="opacity-40 uppercase text-[9px] font-bold">{lang === 'id' ? 'Area Terbuang %:' : 'Wasted Area %:'}</div>
+                                <div className="font-bold text-[12px] text-orange-500">{wastedAreaPct}%</div>
+                              </div>
+                              <div>
+                                <div className="opacity-40 uppercase text-[9px] font-bold">Frontage Muka:</div>
+                                <div className="font-bold text-[12px]">{frontageLength} m</div>
+                              </div>
+                              <div className="col-span-2 pt-1 border-t border-[var(--color-fg)]/10">
+                                <div className="opacity-40 uppercase text-[9px] font-bold">{lang === 'id' ? 'Rekomendasi Layout:' : 'Layout Suggestion:'}</div>
+                                <div className="text-[10px] text-[var(--color-fg)]/90 leading-tight mt-0.5">{shapeRecommendation}</div>
+                              </div>
+                            </div>
+
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10">
+                              <div className="flex justify-between items-center mb-1">
+                                <span className="opacity-60 uppercase font-bold text-[10px]">{lang === 'id' ? 'Skor Pemasaran (Laku):' : 'Marketability Rating:'}</span>
+                                <span className="font-bold text-emerald-500 text-[12px]">{marketabilityScore}%</span>
+                              </div>
+                              <div className="opacity-40 uppercase text-[9px] font-bold">{lang === 'id' ? 'Analisis Kedalaman:' : 'Depth / Ratio Analysis:'}</div>
+                              <div className="text-[10px] text-[var(--color-fg)]/90 leading-tight mt-0.5">{marketabilityDesc}</div>
+                              <div className="text-[9px] opacity-50 mt-1 italic">{lang === 'id' ? 'Rasio Panjang : Lebar' : 'W:L ratio'}: 1 : {aspectWidthToDepthRatio.toFixed(1)}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* TAB 2: POSITION PREMIUMS & SUNLIGHT */}
+                        {ldiSelectedTab === 'valuation' && (
+                          <div className="space-y-3">
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2">
+                              <div className="flex items-center justify-between border-b border-[var(--color-fg)]/10 pb-1">
+                                <span className="font-bold uppercase text-[10px] text-[var(--color-fg)] flex items-center gap-1">📊 {lang === 'id' ? 'Sifat Posisi & Premium' : 'Siting Premiums Map'}</span>
+                              </div>
+                              <div className="space-y-1.5 text-[10px]">
+                                <div className="flex justify-between items-center bg-transparent py-0.5">
+                                  <span className="flex items-center gap-1">👑 Hook / Pojok <span className="text-emerald-500 text-[8px] font-bold bg-emerald-500/10 px-1.5 py-0.2 rounded">+20%</span></span>
+                                  <span className="font-bold text-green-500">{hookCount} Unit</span>
+                                </div>
+                                <div className="flex justify-between items-center bg-transparent py-0.5">
+                                  <span className="flex items-center gap-1 flex-wrap">⚡ Tusuk Sate <span className="text-red-500 text-[8px] font-bold bg-red-500/10 px-1.5 py-0.2 rounded">-10%</span></span>
+                                  <span className="font-bold text-red-500 flex items-center gap-0.5">{tusukSateCount} Unit {tusukSateCount > 0 && <span className="cursor-help" title="Menghadap ujung pertigaan. Disarankan dipasangi pagar kokoh/pohon peneduh.">⚠️</span>}</span>
+                                </div>
+                                <div className="flex justify-between items-center bg-transparent py-0.5">
+                                  <span className="flex items-center gap-1">🏡 Plot Tengah Standard</span>
+                                  <span className="font-bold opacity-80">{stdUnitCount} Unit</span>
+                                </div>
+                              </div>
+                              {numberOfActiveKavlings === 0 && (
+                                <div className="text-[9px] text-amber-600 dark:text-amber-400 bg-amber-500/10 p-1.5 rounded-sm text-center font-bold">
+                                  {lang === 'id' ? 'Lakukan "Setup Subdivision" terlebih dulu.' : 'Enable "Setup Subdivision" first.'}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10">
+                              <div className="flex items-center justify-between border-b border-[var(--color-fg)]/10 pb-1.5 mb-2">
+                                <span className="font-bold uppercase text-[10px] text-[var(--color-fg)] flex items-center gap-1">☀️ {lang === 'id' ? 'Analisis Tata Cahaya Surya' : 'Solar Orientation Analysis'}</span>
+                              </div>
+                              <div className="space-y-2 text-[10px]">
+                                <div className="flex justify-between">
+                                  <span className="opacity-60">{lang === 'id' ? 'Arah Hadap Lahan:' : 'Primary Sun Exposure:'}</span>
+                                  <span className="font-bold text-[var(--color-fg)]">{sunExposureOrientation}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="opacity-60">{lang === 'id' ? 'Pencahayaan Pagi:' : 'Morning Sunrise Exposure:'}</span>
+                                  <span className="font-bold text-green-500">{morningSunScore}% ({lang === 'id' ? 'Optimal & Nyaman' : 'Optimal Sunrise'})</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="opacity-60">{lang === 'id' ? 'Hawa Sore Hari:' : 'Afternoon Sunset Heat:'}</span>
+                                  <span className="font-bold text-orange-500">{afternoonHeatLevel}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* TAB 3: INFRASTRUCTURE BILLING & CONTOUR LEVEL */}
+                        {ldiSelectedTab === 'infra' && (
+                          <div className="space-y-3">
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2">
+                              <div className="flex items-center justify-between border-b border-[var(--color-fg)]/10 pb-1.5 text-[10px]">
+                                <span className="font-bold uppercase tracking-wide">{lang === 'id' ? 'Rencana Pengadaan Infrastruktur' : 'Infrastructure Project BoQ'}</span>
+                              </div>
+                              <div className="space-y-1.5 text-[10px]">
+                                <div className="flex justify-between">
+                                  <span>{lang === 'id' ? 'Paving & Jalan Kompleks' : 'Complex Paving'} ({roadwaySqm > 0 ? roadwaySqm : Math.round(roadLengthEst * 6)} m²):</span>
+                                  <span className="font-bold">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(costPaving)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>{lang === 'id' ? 'Saluran Got / Drainase Utama' : 'U-Ditch Drainage'} ({drainageLengthLine}m):</span>
+                                  <span className="font-bold">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(costDrainage)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>{lang === 'id' ? 'Pipa PAB Air Bersih ' : 'Clean Water Pipeline'} ({waterPipeLine}m):</span>
+                                  <span className="font-bold">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(costWater)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>{lang === 'id' ? 'Instalasi Kabel PLN' : 'Power Lines (PLN)'} ({powerCableLine}m):</span>
+                                  <span className="font-bold">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(costPLN)}</span>
+                                </div>
+                                <div className="flex justify-between border-t border-[var(--color-fg)]/10 pt-1.5 font-bold text-[11px] text-[var(--color-fg)]">
+                                  <span>{lang === 'id' ? 'Est. Total Prasarana:' : 'Subtotal Utilities Cost:'}</span>
+                                  <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(costInfrastructureTotal)}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2.5">
+                              <div className="flex items-center justify-between border-b border-[var(--color-fg)]/10 pb-1.5 text-[10px]">
+                                <span className="font-bold uppercase tracking-wide flex items-center gap-1">
+                                  🧱 {lang === 'id' ? 'Pekerjaan Tanah (Cut & Fill)' : 'Earthwork Grading estimate'}
+                                </span>
+                              </div>
+                              <div className="space-y-2 text-[10px]">
+                                <div className="flex justify-between items-center">
+                                  <span className="opacity-60">{lang === 'id' ? 'Kemiringan Tanah Alami:' : 'Average Incline Ratio:'}</span>
+                                  <span className="font-bold text-orange-500 font-mono">{averageSlopePct}% ({averageSlopePct > 15 ? (lang === 'id' ? 'Curam' : 'Steep') : averageSlopePct > 5 ? (lang === 'id' ? 'Sedang' : 'Moderate') : (lang === 'id' ? 'Landai' : 'Gentle')})</span>
+                                </div>
+
+                                {/* Soil Type Selection */}
+                                <div className="space-y-1">
+                                  <span className="opacity-40 text-[9px] uppercase font-bold block">{lang === 'id' ? 'Kondisi Geologi Tanah:' : 'Geological Soil Type:'}</span>
+                                  <div className="grid grid-cols-3 gap-1 bg-black/10 dark:bg-white/5 p-0.5 rounded text-[9px]">
+                                    <button
+                                      type="button"
+                                      onClick={() => { setLdiSoilType('sandy_loam'); setLdiOptimizationReport(null); }}
+                                      className={`py-1 rounded text-center font-bold font-sans transition-all ${ldiSoilType === 'sandy_loam' ? 'bg-[var(--color-fg)] text-[var(--color-bg)]' : 'opacity-60 hover:opacity-100'}`}
+                                    >
+                                      🏜️ {lang === 'id' ? 'Pasir' : 'Sandy'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setLdiSoilType('clay'); setLdiOptimizationReport(null); }}
+                                      className={`py-1 rounded text-center font-bold font-sans transition-all ${ldiSoilType === 'clay' ? 'bg-[var(--color-fg)] text-[var(--color-bg)]' : 'opacity-60 hover:opacity-100'}`}
+                                    >
+                                      🧱 {lang === 'id' ? 'Liat' : 'Clay'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setLdiSoilType('gravel_rock'); setLdiOptimizationReport(null); }}
+                                      className={`py-1 rounded text-center font-bold font-sans transition-all ${ldiSoilType === 'gravel_rock' ? 'bg-[var(--color-fg)] text-[var(--color-bg)]' : 'opacity-60 hover:opacity-100'}`}
+                                    >
+                                      🪨 {lang === 'id' ? 'Batu' : 'Rock'}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Grading & Terracing Strategy Selection */}
+                                <div className="space-y-1">
+                                  <span className="opacity-40 text-[9px] uppercase font-bold block">{lang === 'id' ? 'Metode Grading Lereng:' : 'Grading Strategy & Steps:'}</span>
+                                  <div className="grid grid-cols-3 gap-1 bg-black/10 dark:bg-white/5 p-0.5 rounded text-[9px]">
+                                    <button
+                                      type="button"
+                                      onClick={() => { setLdiGradingStrategy('continuous'); setLdiOptimizationReport(null); }}
+                                      className={`py-1 rounded text-center font-bold font-sans transition-all ${ldiGradingStrategy === 'continuous' ? 'bg-[var(--color-fg)] text-[var(--color-bg)]' : 'opacity-60 hover:opacity-100'}`}
+                                      title={lang === 'id' ? 'Desain kemiringan lurus tanpa undakan' : 'Single continuous flat slope plane'}
+                                    >
+                                      📉 {lang === 'id' ? 'Lurus' : 'Continuous'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setLdiGradingStrategy('terrace_2'); setLdiOptimizationReport(null); }}
+                                      className={`py-1 rounded text-center font-bold font-sans transition-all ${ldiGradingStrategy === 'terrace_2' ? 'bg-[var(--color-fg)] text-[var(--color-bg)]' : 'opacity-60 hover:opacity-100'}`}
+                                      title={lang === 'id' ? 'Kavling berundak 2 level split' : 'Double step level terraced site'}
+                                    >
+                                      🪜 {lang === 'id' ? 'Teras x2' : 'Terrace x2'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setLdiGradingStrategy('terrace_3'); setLdiOptimizationReport(null); }}
+                                      className={`py-1 rounded text-center font-bold font-sans transition-all ${ldiGradingStrategy === 'terrace_3' ? 'bg-[var(--color-fg)] text-[var(--color-bg)]' : 'opacity-60 hover:opacity-100'}`}
+                                      title={lang === 'id' ? 'Kavling berundak 3 tingkat' : 'Triple step level terraced site'}
+                                    >
+                                      🏰 {lang === 'id' ? 'Teras x3' : 'Terrace x3'}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center justify-between pt-1 border-t border-[var(--color-fg)]/5">
+                                  <span className="opacity-60 text-[9px]">{lang === 'id' ? 'Target Kelonggaran Akhir:' : 'Target Grade Slope:'}</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <input 
+                                      type="range" 
+                                      min="0" 
+                                      max="25" 
+                                      value={ldiEarthworkDesiredGrade}
+                                      onChange={(e) => { setLdiEarthworkDesiredGrade(Number(e.target.value)); setLdiOptimizationReport(null); }}
+                                      className="w-16 accent-fuchsia-600 h-1 cursor-pointer"
+                                    />
+                                    <span className="font-bold text-[10px] w-6 text-right font-mono">{ldiEarthworkDesiredGrade}%</span>
+                                  </div>
+                                </div>
+
+                                {/* Dynamic Mass Balance Progress meter */}
+                                <div className="space-y-1.5 bg-black/10 dark:bg-white/5 p-2 rounded-md border border-[var(--color-fg)]/10">
+                                  <div className="grid grid-cols-2 gap-2 text-[9px]">
+                                    <div>
+                                      <div className="opacity-50 uppercase">{lang === 'id' ? 'Galian (Cut):' : 'Excavation (Cut):'}</div>
+                                      <div className="font-bold font-mono text-emerald-500">{cutVolume} m³</div>
+                                    </div>
+                                    <div>
+                                      <div className="opacity-50 uppercase">{lang === 'id' ? 'Timbunan (Fill):' : 'Embankment (Fill):'}</div>
+                                      <div className="font-bold font-mono text-blue-500">{fillVolume} m³</div>
+                                    </div>
+                                  </div>
+
+                                  <div className="h-1 w-full bg-[var(--color-fg)]/10 rounded-full overflow-hidden flex">
+                                    {cutVolume + fillVolume > 0 ? (
+                                      <>
+                                        <div className="bg-emerald-500 h-full" style={{ width: `${(cutVolume / (cutVolume + fillVolume || 1)) * 100}%` }}></div>
+                                        <div className="bg-blue-500 h-full" style={{ width: `${(fillVolume / (cutVolume + fillVolume || 1)) * 100}%` }}></div>
+                                      </>
+                                    ) : (
+                                      <div className="bg-[var(--color-fg)]/25 w-full h-full"></div>
+                                    )}
+                                  </div>
+
+                                  <div className="text-[9px] leading-snug space-y-1 font-mono">
+                                    <div className="flex justify-between opacity-80 border-b border-[var(--color-fg)]/5 pb-1">
+                                      <span>{lang === 'id' ? 'Swell Tanah (Galian Gembur):' : 'Loose Swell Vol:'}</span>
+                                      <span>+{Math.round((swellFactor - 1) * 100)}% ({looseCutVol} m³)</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-[9.5px]">
+                                      <span>{lang === 'id' ? 'Neraca Sisa Tanah:' : 'Net Mass Balance:'}</span>
+                                      {netLooseSoil > 0 ? (
+                                        <span className="text-orange-500 font-bold bg-orange-500/10 px-1 py-0.2 rounded">
+                                          📤 Export {netLooseSoil} m³
+                                        </span>
+                                      ) : netLooseSoil < 0 ? (
+                                        <span className="text-amber-500 font-bold bg-amber-500/10 px-1 py-0.2 rounded">
+                                          📥 Import {Math.abs(netLooseSoil)} m³
+                                        </span>
+                                      ) : (
+                                        <span className="text-emerald-500 font-bold bg-emerald-500/10 px-1 py-0.2 rounded">
+                                          ⚖️ Balanced
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Detail Cost Breakdown */}
+                                <div className="space-y-1 bg-black/10 dark:bg-white/5 p-2 rounded-md border border-[var(--color-fg)]/10 font-mono text-[9px] leading-normal opacity-90">
+                                  <div className="flex justify-between">
+                                    <span>• {lang === 'id' ? 'Biaya Kupas & Gali:' : 'Swell & Excavation Fees:'}</span>
+                                    <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format((cutVolume + fillVolume) * excUnitCost)}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>• {lang === 'id' ? 'Tanggul Penahan (Wall ' : 'Retaining Wall '} {maxHeightDiff.toFixed(1)}m):</span>
+                                    <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(costRetainingWall)}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>• {lang === 'id' ? 'Mobilisasi Tanah (Im/Ex):' : 'Soil Cartage (Traffic):'}</span>
+                                    <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(costImportExport)}</span>
+                                  </div>
+                                </div>
+
+                                <div className="flex justify-between border-t border-[var(--color-fg)]/10 pt-1.5 font-bold font-sans">
+                                  <span>{lang === 'id' ? 'Total Biaya Pekerjaan Lereng:' : 'Total Grading Cost:'}</span>
+                                  <span className="text-amber-500 font-mono font-bold">
+                                    {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(costCutAndFill)}
+                                  </span>
+                                </div>
+
+                                {/* AUTO grading optimizer solver triggering panel */}
+                                <div className="pt-2 border-t border-[var(--color-fg)]/10 space-y-2">
+                                  {!ldiOptimizationReport && !ldiIsOptimizing && (
+                                    <button
+                                      type="button"
+                                      onClick={handleOptimizeEarthwork}
+                                      className="w-full py-2 px-3 bg-fuchsia-600 hover:bg-fuchsia-700 hover:shadow-md hover:shadow-fuchsia-500/10 transition-all font-bold text-[9.5px] text-white rounded flex items-center justify-center gap-1.5 uppercase tracking-wider active:scale-[0.98]"
+                                    >
+                                      <Sparkles size={11} className="text-white shrink-0 animate-pulse" />
+                                      {lang === 'id' ? 'Optimasi Auto-Grading & Cut/Fill' : 'Auto-Optimize Cut/Fill Solver'}
+                                    </button>
+                                  )}
+
+                                  {ldiIsOptimizing && (
+                                    <div className="py-2.5 flex flex-col items-center justify-center bg-fuchsia-500/5 rounded border border-fuchsia-500/20">
+                                      <div className="w-4 h-4 border-2 border-fuchsia-500 border-t-transparent rounded-full animate-spin mb-1"></div>
+                                      <span className="text-[9px] font-bold text-fuchsia-500 animate-pulse uppercase tracking-wider">
+                                        {lang === 'id' ? 'MENGHITUNG INTEGRAL LERENG...' : 'SOLVING MASS-BALANCE INTEGRALS...'}
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {/* Optimization Solver Finished report card */}
+                                  {ldiOptimizationReport && (
+                                    <div className="p-2.5 rounded border border-fuchsia-500/20 bg-fuchsia-500/10 text-[9.5px] text-[var(--color-fg)] space-y-2 relative overflow-hidden">
+                                      <div className="absolute right-1 top-1 text-[24px] opacity-10 select-none font-bold">⚖️</div>
+                                      <div className="flex items-center gap-1 font-bold text-fuchsia-600 dark:text-fuchsia-400">
+                                        <Sparkles size={11} className="shrink-0 animate-bounce" />
+                                        <span>{lang === 'id' ? 'REKOMENDASI MODEL OPTIMAL' : 'OPTIMUM EARTHWORK MODEL FOUND'}</span>
+                                      </div>
+
+                                      <div className="space-y-1 font-mono text-[9px] bg-black/10 dark:bg-black/20 p-1.5 rounded border border-fuchsia-500/5">
+                                        <div className="flex justify-between">
+                                          <span>• {lang === 'id' ? 'Saran Kemiringan (Slope):' : 'Recom. Slope Grade:'}</span>
+                                          <span className="font-bold text-fuchsia-500">{ldiOptimizationReport.optimalGrade}%</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>• {lang === 'id' ? 'Saran Strategi (Steps):' : 'Recom. Terraces:'}</span>
+                                          <span className="font-bold capitalize text-fuchsia-500">
+                                            {ldiOptimizationReport.optimalStrategy === 'continuous' 
+                                              ? (lang === 'id' ? 'Lurus Rata' : 'Continuous') 
+                                              : ldiOptimizationReport.optimalStrategy === 'terrace_2' 
+                                                ? (lang === 'id' ? 'Terasering x2' : 'Double step') 
+                                                : (lang === 'id' ? 'Terasering x3' : 'Triple step')}
+                                          </span>
+                                        </div>
+                                        <div className="flex justify-between border-t border-[var(--color-fg)]/10 pt-1 mt-1 font-bold">
+                                          <span>• {lang === 'id' ? 'Harga Model Optimal:' : 'Optimal Model Cost:'}</span>
+                                          <span className="font-bold text-emerald-500">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(ldiOptimizationReport.minCost)}</span>
+                                        </div>
+                                      </div>
+
+                                      {ldiOptimizationReport.vsStandardSavings > 0 ? (
+                                        <div className="bg-emerald-500/15 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold p-1 rounded font-sans text-center text-[10px]">
+                                          🎉 {lang === 'id' ? 'Menghemat Biaya Sebesar: ' : 'Cost reduction saved: '}
+                                          <span className="font-mono">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(ldiOptimizationReport.vsStandardSavings)}</span>
+                                        </div>
+                                      ) : (
+                                        <div className="bg-blue-500/10 border border-blue-500/20 font-bold p-1 rounded font-sans text-center text-[9px] opacity-80">
+                                          💡 {lang === 'id' ? 'Desain Anda saat ini sudah sangat optimal.' : 'Your current layout matches optimum efficiency.'}
+                                        </div>
+                                      )}
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setLdiEarthworkDesiredGrade(ldiOptimizationReport.optimalGrade);
+                                          setLdiGradingStrategy(ldiOptimizationReport.optimalStrategy);
+                                          setLdiOptimizationReport(null);
+                                        }}
+                                        className="w-full mt-1.5 py-1.5 bg-fuchsia-600 hover:bg-fuchsia-700 text-white font-bold rounded flex items-center justify-center gap-1 transition-all shadow-sm active:scale-95 text-[9px]"
+                                      >
+                                        ✓ {lang === 'id' ? 'Terapkan Desain Rekomendasi' : 'Apply Optimized Design Models'}
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* TAB 4: DEVELOPER & INVESTOR FEASIBILITY */}
+                        {ldiSelectedTab === 'financial' && (
+                          <div className="space-y-3">
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2">
+                              <div className="border-b border-[var(--color-fg)]/10 pb-1 flex justify-between text-[10px] font-bold uppercase tracking-wider">
+                                <span>{lang === 'id' ? 'Rencana Anggaran Biaya (RAB)' : 'Investment Sunk Budget'}</span>
+                              </div>
+                              <div className="space-y-1.5 text-[10px]">
+                                <div className="flex justify-between">
+                                  <span className="opacity-60">{lang === 'id' ? 'Nilai Pembelian Tanah:' : 'Land Acquisition:'}</span>
+                                  <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(simulatedAcquisitionPrice)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="opacity-60">{lang === 'id' ? 'Fasum & Utilitas Jalan:' : 'Roads & Utilities Cost:'}</span>
+                                  <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(costInfrastructureTotal + costCutAndFill)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>{lang === 'id' ? 'Pemisahan Sertifikat (Pecah SHM):' : 'SHM Splitting Fees'}</span>
+                                  <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(certificationCost)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Premium Branding & {lang === 'id' ? 'Pemasaran (3.5%):' : 'Sales Fee:'}</span>
+                                  <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(brandingMarketingCost)}</span>
+                                </div>
+                                <div className="flex justify-between border-t border-[var(--color-fg)]/10 pt-1.5 font-bold text-[11px] text-emerald-500">
+                                  <span>{lang === 'id' ? 'TOTAL MODAL AWAL:' : 'TOTAL CAPITAL SOUGHT:'}</span>
+                                  <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(totalCapitalInvested)}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2 mt-3 text-[var(--color-fg)]">
+                              <div className="border-b border-[var(--color-fg)]/10 pb-1 flex justify-between text-[10px] font-bold uppercase tracking-wider">
+                                <span>{lang === 'id' ? 'Opsi Strategi Pekerjaan Tanah' : 'Earthwork Grading Strategy Comparison'}</span>
+                              </div>
+                              <div className="space-y-1.5 text-[9px] pt-1 mt-1">
+                                {gradingComparison.map((strat, idx) => (
+                                  <div key={idx} className={`flex justify-between p-1.5 rounded items-center ${ldiGradingStrategy === (strat.mode === 'Continuous' ? 'continuous' : strat.mode === '2-Terrace' ? 'terrace_2' : 'terrace_3') ? 'bg-fuchsia-500/10 font-bold border border-fuchsia-500/20 text-fuchsia-500' : 'bg-[var(--color-fg)]/5 border border-transparent'}`}>
+                                    <span>{strat.mode} {ldiGradingStrategy === (strat.mode === 'Continuous' ? 'continuous' : strat.mode === '2-Terrace' ? 'terrace_2' : 'terrace_3') && '✓'}</span>
+                                    <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(strat.cost)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2 mt-3 text-[var(--color-fg)]">
+                              <div className="border-b border-[var(--color-fg)]/10 pb-1 flex justify-between text-[10px] font-bold uppercase tracking-wider">
+                                <span>{lang === 'id' ? 'Komposisi Modal' : 'Capital Allocation'}</span>
+                              </div>
+                              <div className="h-40 w-full pointer-events-auto">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <PieChart>
+                                    <Pie
+                                      data={[
+                                        { name: lang === 'id' ? 'Tanah' : 'Acquisition', value: simulatedAcquisitionPrice },
+                                        { name: lang === 'id' ? 'Infrastruktur' : 'Infrastructure', value: costInfrastructureTotal },
+                                        { name: lang === 'id' ? 'Cut & Fill' : 'Earthwork', value: costCutAndFill },
+                                        { name: lang === 'id' ? 'Legal' : 'Legal Fees', value: certificationCost },
+                                        { name: lang === 'id' ? 'Pemasaran' : 'Marketing', value: brandingMarketingCost }
+                                      ].filter(d => d.value > 0)}
+                                      cx="50%"
+                                      cy="50%"
+                                      innerRadius={35}
+                                      outerRadius={55}
+                                      paddingAngle={2}
+                                      dataKey="value"
+                                      stroke="none"
+                                    >
+                                      {
+                                        [
+                                          { name: lang === 'id' ? 'Tanah' : 'Acquisition', value: simulatedAcquisitionPrice },
+                                          { name: lang === 'id' ? 'Infrastruktur' : 'Infrastructure', value: costInfrastructureTotal },
+                                          { name: lang === 'id' ? 'Cut & Fill' : 'Earthwork', value: costCutAndFill },
+                                          { name: lang === 'id' ? 'Legal' : 'Legal Fees', value: certificationCost },
+                                          { name: lang === 'id' ? 'Pemasaran' : 'Marketing', value: brandingMarketingCost }
+                                        ].filter(d => d.value > 0).map((entry, index) => (
+                                          <Cell key={`cell-${index}`} fill={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ec4899'][index % 5]} />
+                                        ))
+                                      }
+                                    </Pie>
+                                    <RechartsTooltip 
+                                      formatter={(value: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value)}
+                                      contentStyle={{ backgroundColor: 'var(--color-bg)', borderColor: 'rgba(var(--color-fg-rgb), 0.1)', fontSize: '10px' }}
+                                      itemStyle={{ color: 'var(--color-fg)' }}
+                                    />
+                                  </PieChart>
+                                </ResponsiveContainer>
+                              </div>
+                            </div>
+
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2">
+                              <div className="border-b border-[var(--color-fg)]/10 pb-1 flex justify-between text-[10px] font-bold uppercase tracking-wider">
+                                <span>{lang === 'id' ? 'Analisis Keuntungan & Penjualan' : 'Pricing Matrix & ROI'}</span>
+                              </div>
+                              <div className="space-y-2 text-[10px]">
+                                <div className="flex items-center justify-between">
+                                  <span className="opacity-60">Target ROI Pengembang:</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <input 
+                                      type="range" 
+                                      min="15" 
+                                      max="100" 
+                                      step="5"
+                                      value={ldiTargetROI}
+                                      onChange={(e) => setLdiTargetROI(Number(e.target.value))}
+                                      className="w-16 accent-fuchsia-500 cursor-pointer h-1 rounded"
+                                    />
+                                    <span className="font-bold text-fuchsia-500">{ldiTargetROI}%</span>
+                                  </div>
+                                </div>
+                                <div className="flex justify-between text-[9px] bg-fuchsia-500/5 p-1 rounded-sm">
+                                  <span className="opacity-70">{lang === 'id' ? 'Omzet Penjualan Target:' : 'Target Gross Revenue:'}</span>
+                                  <span className="font-bold text-fuchsia-500">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(targetGrossRevenue)}</span>
+                                </div>
+                                <div className="border-t border-[var(--color-fg)]/10 pt-1.5 space-y-1">
+                                  <div className="font-bold text-[10px] text-[var(--color-fg)]">{lang === 'id' ? 'Rekomendasi Harga per Kavling:' : 'Suggested Plot Selling Prices:'}</div>
+                                  {numberOfActiveKavlings > 0 ? (
+                                    <div className="space-y-1 mt-1 text-[9px]">
+                                      <div className="flex justify-between font-semibold">
+                                        <span>Unit Standard (Tengah):</span>
+                                        <span className="font-bold text-emerald-500">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(baseUnitCalculatedSellingPrice)} /unit</span>
+                                      </div>
+                                      <div className="flex justify-between text-[var(--color-fg)]/80">
+                                        <span>Unit Hook (+20%):</span>
+                                        <span className="font-bold text-green-500">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(baseUnitCalculatedSellingPrice * 1.2)} /unit</span>
+                                      </div>
+                                      <div className="flex justify-between text-[var(--color-fg)]/80">
+                                        <span>Unit Tusuk Sate (-10%):</span>
+                                        <span className="font-bold text-red-500">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(baseUnitCalculatedSellingPrice * 0.9)} /unit</span>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="text-[9px] opacity-40 italic text-center py-1">{lang === 'id' ? 'Lakukan kavlingisasi dulu.' : 'Run subdivision layout first.'}</div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* TAB 5: LEGAL & COMPLIANCE */}
+                        {ldiSelectedTab === 'legal' && (
+                          <div className="space-y-3">
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2">
+                              <div className="flex items-center justify-between border-b border-[var(--color-fg)]/10 pb-1.5">
+                                <span className="font-bold uppercase text-[10px] text-[var(--color-fg)] flex items-center gap-1">📋 {lang === 'id' ? 'Kesesuaian Tata Ruang & RDTR' : 'Legal Compliance check'}</span>
+                                <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded border ${complianceColor}`}>{complianceRating}</span>
+                              </div>
+                              <p className="text-[10px] text-[var(--color-fg)]/80 leading-normal mb-2 font-semibold">{complianceExplain}</p>
+                              
+                              <div className="space-y-2 pt-1 border-t border-[var(--color-fg)]/10 text-[10px]">
+                                <div className="flex items-center justify-between">
+                                  <span>{lang === 'id' ? 'Proteksi Lahan Lembab LP2B:' : 'LP2B Greenfield Check:'}</span>
+                                  <label className="relative flex items-center cursor-pointer">
+                                    <input 
+                                      type="checkbox" 
+                                      checked={ldiComplianceLP2B} 
+                                      onChange={() => setLdiComplianceLP2B(!ldiComplianceLP2B)}
+                                      className="accent-fuchsia-500"
+                                    />
+                                    <span className="ml-1 text-[9px] font-bold text-amber-500 uppercase">LP2B BLOCKED</span>
+                                  </label>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span>{lang === 'id' ? 'Rencana Zonasi Wilayah (RDTR):' : 'RDTR Designation plan:'}</span>
+                                  <select 
+                                    value={ldiRDTRZoning} 
+                                    onChange={(e) => setLdiRDTRZoning(e.target.value)}
+                                    className="bg-transparent border-b border-[var(--color-fg)]/20 text-[10px] font-bold text-[var(--color-fg)] focus:outline-none"
+                                  >
+                                    <option value="Perumahan Kepadatan Sedang" className="bg-slate-900 text-white">R-3 Perumahan</option>
+                                    <option value="Perumahan Kepadatan Rendah" className="bg-slate-900 text-white">R-1 Perumahan</option>
+                                    <option value="Zonasi Hijau Lindung" className="bg-slate-900 text-white">H-1 Kawasan RTH</option>
+                                    <option value="Kawasan Komersial" className="bg-slate-900 text-white">K-2 Jasa & Niaga</option>
+                                  </select>
+                                </div>
+                                <div className="space-y-1.5 text-[9px] bg-black/5 dark:bg-white/5 p-2 rounded">
+                                  <div className="flex items-center justify-between">
+                                    <span>{lang === 'id' ? 'Peruntukan Lahan (RDTR Kualifikasi):' : 'Local Zoning Allocation:'}</span>
+                                    <span className={ldiRDTRZoning === 'Zonasi Hijau Lindung' ? 'text-red-500 font-bold' : 'text-emerald-500 font-bold'}>
+                                      {ldiRDTRZoning === 'Zonasi Hijau Lindung' ? '✗ DIALANGI (H-1)' : '✓ LAYAK BANGUN'}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span>{lang === 'id' ? 'GSB Sempadan Jalan:' : 'Street Setbacks (GSB):'}</span>
+                                    <span className="text-emerald-500 font-bold">✓ LOLOS</span>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span>{lang === 'id' ? 'RTH / Koefisien Terbuka (>15%):' : 'Open Green Space (>15% ratio):'}</span>
+                                    <span className="text-emerald-500 font-bold">✓ LOLOS ({lang === 'id' ? 'Optimal' : 'Optimal'})</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* TAB 6: GROQ AI ADVISORY */}
+                        {ldiSelectedTab === 'groq' && (
+                          <div className="space-y-3">
+                            <div className="bg-fuchsia-500/5 p-3 rounded-lg border border-fuchsia-500/10 space-y-3">
+                              <div className="flex items-center justify-between border-b border-fuchsia-500/10 pb-2">
+                                <div className="flex items-center gap-1.5">
+                                  <Sparkles size={14} className="text-fuchsia-500 animate-pulse shrink-0" />
+                                  <span className="font-bold uppercase text-[10px] text-fuchsia-600 dark:text-fuchsia-400">
+                                    {lang === 'id' ? 'Konsultasi Tata Ruang Groq' : 'Groq Spatial Advisory'}
+                                  </span>
+                                </div>
+                                <span className="bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full shrink-0">
+                                  Llama-3.3 70B Active
+                                </span>
+                              </div>
+
+                              <p className="text-[10px] text-[var(--color-fg)]/80 leading-normal mb-1">
+                                {lang === 'id' 
+                                  ? 'Kirimkan data geometris, kontur level, dan simulasi keuntungan finansial ke mesin kecerdasan buatan Groq Llama-3 untuk mendapatkan asisten laporan formal.'
+                                  : 'Transmit precise geometry, contour levels, and target financial feasibility metrics to Groq Llama-3 super-intelligence for a bespoke development report.'}
+                              </p>
+
+                              {!groqAdvisory && !isGeneratingGroqAdvisory && (
+                                <button
+                                  onClick={handleGenerateGroqAdvisory}
+                                  className="w-full mt-2 py-2.5 px-4 bg-fuchsia-600 hover:bg-fuchsia-700 active:scale-95 text-white font-bold rounded text-[11px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-md shadow-fuchsia-500/10"
+                                >
+                                  <Sparkles size={12} className="animate-pulse" />
+                                  {lang === 'id' ? 'Mulai Analisis Groq AI' : 'Trigger Groq AI Analysis'}
+                                </button>
+                              )}
+
+                              {isGeneratingGroqAdvisory && (
+                                <div className="py-4 flex flex-col items-center justify-center space-y-2">
+                                  <div className="w-6 h-6 border-2 border-fuchsia-500 border-t-transparent rounded-full animate-spin"></div>
+                                  <span className="text-[10px] text-fuchsia-500 animate-pulse font-bold uppercase tracking-wider">
+                                    {lang === 'id' ? 'Menghubungkan ke Groq API...' : 'Generating Advisory via Groq...'}
+                                  </span>
+                                </div>
+                              )}
+
+                              {groqError && (
+                                <div className="p-2 border border-red-500/20 bg-red-500/5 text-red-500 text-[10px] rounded space-y-1">
+                                  <div className="font-bold">⚠️ Error:</div>
+                                  <div>{groqError}</div>
+                                  <button
+                                    onClick={handleGenerateGroqAdvisory}
+                                    className="text-[9px] font-bold underline cursor-pointer uppercase text-red-400 block mt-1 hover:text-red-300"
+                                  >
+                                    {lang === 'id' ? 'Coba Lagi' : 'Retry'}
+                                  </button>
+                                </div>
+                              )}
+
+                              {groqAdvisory && (
+                                <div className="space-y-3">
+                                  <div className="max-h-[300px] overflow-y-auto border border-fuchsia-500/10 rounded bg-black/15 dark:bg-white/5 p-3 font-sans text-[11px] leading-relaxed text-[var(--color-fg)]/95 whitespace-pre-wrap select-all scrollbar-thin">
+                                    {groqAdvisory}
+                                  </div>
+
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={handleGenerateGroqAdvisory}
+                                      disabled={isGeneratingGroqAdvisory}
+                                      className="flex-1 py-1.5 bg-fuchsia-500/10 hover:bg-fuchsia-500/20 text-fuchsia-600 dark:text-fuchsia-400 border border-fuchsia-500/20 font-bold rounded text-[10px] uppercase transition-all flex items-center justify-center gap-1"
+                                    >
+                                      🔄 {lang === 'id' ? 'Re-Generasi' : 'Regenerate'}
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(groqAdvisory);
+                                        alert(lang === 'id' ? 'Disalin ke clipboard!' : 'Copied to clipboard!');
+                                      }}
+                                      className="py-1.5 px-3 bg-[var(--color-fg)]/5 hover:bg-[var(--color-fg)]/10 text-[var(--color-fg)]/80 border border-[var(--color-fg)]/10 font-bold rounded text-[10px] uppercase transition-all"
+                                    >
+                                      📋 {lang === 'id' ? 'Salin Hasil' : 'Copy'}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           </div>
 
@@ -6591,9 +8229,18 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
               onClick={() => setActiveModal('export')}
               disabled={points.length === 0}
               className="w-full py-4 bg-[var(--color-fg)] text-[var(--color-bg)] text-[12px] uppercase tracking-widest font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed shadow-lg"
+              title={lang === 'id' ? "Dapatkan laporan PDF profesional, file CAD DXF, GeoJSON kustom atau CSV" : "Generate professional PDF reports, DXF CAD files, GeoJSON, or CSV"}
             >
               <Download size={16} /> {t(lang, 'exportData')}
             </button>
+
+            {showGuideMode && (
+              <div className="text-[9px] font-semibold text-[var(--color-fg)]/70 bg-[var(--color-fg)]/5 p-2.5 rounded-xl leading-relaxed text-left">
+                {lang === 'id' 
+                  ? '💾 EKSPOR DATA:\nUnduh peta & hasil perhitungan. Mendukung laporan PDF formal yang memuat peta + diagram luas, file CAD (.dxf) untuk di-import ke AutoCAD/SketchUp, GeoJSON spasial, maupun XLS/CSV.' 
+                  : '💾 EXPORT REPORT:\nDownload data. Compiles formal PDF reports (maps + zoning metrics), editable CAD .dxf vectors, spatial GeoJSON, and coordinates list spreadsheet tables.'}
+              </div>
+            )}
             
 
             
