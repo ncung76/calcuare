@@ -7257,10 +7257,20 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                             <input 
                                 type="checkbox" 
                                 checked={showSlopeHeatmap}
-                                onChange={(e) => setShowSlopeHeatmap(e.target.checked)}
+                                onChange={(e) => {
+                                    setShowSlopeHeatmap(e.target.checked);
+                                }}
                             />
-                            Tampilkan Overlay Slope di Peta
+                            {showSlopeHeatmap ? "Overlay Terlihat" : "Overlay Tersembunyi"}
                         </label>
+                        {showSlopeHeatmap && (
+                            <button 
+                                onClick={() => setShowSlopeHeatmap(false)}
+                                className="w-full bg-[var(--color-fg)]/10 py-1 text-[9px] uppercase font-bold hover:bg-[var(--color-fg)] hover:text-white transition-all flex items-center justify-center"
+                            >
+                                Sembunyikan Overlay
+                            </button>
+                        )}
                         <div className="flex gap-2">
                            <div className="w-1/3 text-center text-[9px]"><div className="h-2 w-full mb-1 opacity-60" style={{backgroundColor: '#22c55e'}}></div>{'< 5% (Datar)'}</div>
                            <div className="w-1/3 text-center text-[9px]"><div className="h-2 w-full mb-1 opacity-60" style={{backgroundColor: '#eab308'}}></div>{'5-15%'}</div>
