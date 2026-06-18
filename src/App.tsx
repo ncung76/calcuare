@@ -1538,14 +1538,21 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
     }
   }, [points, fetchAddressForCoordinates]);
 
+  const lastRdtrCoord = useRef<{lat: number, lng: number} | null>(null);
+
   useEffect(() => {
     if (points.length > 0) {
-      // setShowRdtr(true); // Disabled automatic trigger
-      // setSidebarActiveTab('rdtr'); // Disabled automatic switch
-      // setIsRdtrActive(true); // Disabled automatic switch
-      handleMapClickForRdtr(points[0].lat, points[0].lng);
+      const firstPoint = points[0];
+      const hasChanged = !lastRdtrCoord.current || 
+                         lastRdtrCoord.current.lat !== firstPoint.lat || 
+                         lastRdtrCoord.current.lng !== firstPoint.lng;
+      
+      if (hasChanged) {
+        lastRdtrCoord.current = { lat: firstPoint.lat, lng: firstPoint.lng };
+        handleMapClickForRdtr(firstPoint.lat, firstPoint.lng);
+      }
     } else if (points.length === 0) {
-      // setShowRdtr(false); // Disabled automatic trigger
+      lastRdtrCoord.current = null;
       setRdtrResult(null);
       setRdtrClickedPoint(null);
     }
@@ -2982,7 +2989,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
             pdf.line(margin, rdtrY, margin + availableWidth, rdtrY);
             rdtrY += 10;
             
-            // Draw a colored highlight box for the zone
+            // Draw a professional header box for the zone
             const rawColor = rdtrData.color || "#db2777";
             let rdtrR = 219, rdtrG = 39, rdtrB = 119;
             if (rawColor.startsWith("rgb")) {
@@ -2997,73 +3004,81 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
                 }
             }
             
+            // Header Banner for Zone
             pdf.setFillColor(rdtrR, rdtrG, rdtrB);
-            pdf.rect(margin, rdtrY, 4, 14, "F");
-            
+            pdf.roundedRect(margin, rdtrY, availableWidth, 12, 1, 1, 'F');
+            pdf.setTextColor(255, 255, 255);
             pdf.setFont("helvetica", "bold");
-            pdf.setFontSize(12);
-            pdf.setTextColor(rdtrR, rdtrG, rdtrB);
+            pdf.setFontSize(11);
             const zoneTitle = rdtrData.zona || rdtrData.namobj || "Zona Tidak Terdefinisi";
-            pdf.text(zoneTitle, margin + 8, rdtrY + 5);
+            pdf.text(zoneTitle.toUpperCase(), margin + 5, rdtrY + 7.5);
             
-            pdf.setFont("helvetica", "normal");
-            pdf.setFontSize(10);
-            pdf.setTextColor(50, 50, 50);
-            pdf.text(`${lang === 'id' ? 'Kode Zona:' : 'Zone Code:'} ${rdtrData.kode || "-"}`, margin + 8, rdtrY + 12);
-            rdtrY += 25;
+            pdf.setFontSize(9);
+            const codeText = `${lang === 'id' ? 'KODE:' : 'CODE:'} ${rdtrData.kode || "-"}`;
+            const codeWidth = pdf.getTextWidth(codeText);
+            pdf.text(codeText, margin + availableWidth - codeWidth - 5, rdtrY + 7.5);
+
+            rdtrY += 22;
             
-            // Add description (as requested by user)
+            // Description Section with subtle separator
             if (rdtrData.deskripsi) {
+                pdf.setTextColor(rdtrR, rdtrG, rdtrB);
                 pdf.setFont("helvetica", "bold");
-                pdf.setFontSize(11);
-                pdf.text(lang === 'id' ? "DESKRIPSI / PERUNTUKAN:" : "DESCRIPTION / PURPOSE:", margin, rdtrY);
-                rdtrY += 7;
-                pdf.setFont("helvetica", "normal");
                 pdf.setFontSize(10);
+                pdf.text(lang === 'id' ? "DESKRIPSI & PERUNTUKAN" : "DESCRIPTION & PURPOSE", margin, rdtrY);
+                rdtrY += 6;
+                
+                pdf.setTextColor(60, 60, 60);
+                pdf.setFont("helvetica", "normal");
+                pdf.setFontSize(9.5);
                 const splitDesc = pdf.splitTextToSize(rdtrData.deskripsi, availableWidth);
                 pdf.text(splitDesc, margin, rdtrY);
                 rdtrY += (splitDesc.length * 5) + 12;
             }
 
+            // Regulation Metrics with Structured Layout
+            pdf.setTextColor(rdtrR, rdtrG, rdtrB);
             pdf.setFont("helvetica", "bold");
-            pdf.setFontSize(11);
-            pdf.text(lang === 'id' ? "METRIK REGULASI" : "REGULATION METRICS", margin, rdtrY);
+            pdf.setFontSize(10);
+            pdf.text(lang === 'id' ? "METRIK REGULASI TEKNIS" : "TECHNICAL REGULATION METRICS", margin, rdtrY);
             rdtrY += 8;
             
+            pdf.setDrawColor(rdtrR, rdtrG, rdtrB);
+            pdf.setLineWidth(0.3);
+            pdf.line(margin, rdtrY - 5, margin + 40, rdtrY - 5);
+
+            pdf.setTextColor(80, 80, 80);
             pdf.setFont("helvetica", "normal");
-            pdf.setFontSize(10);
+            pdf.setFontSize(9);
             
+            const drawMetric = (label: string, value: string) => {
+                pdf.text(label, margin, rdtrY);
+                pdf.setFont("helvetica", "bold");
+                pdf.text(value, margin + 80, rdtrY);
+                pdf.setFont("helvetica", "normal");
+                rdtrY += 6;
+            };
+
             const kdbVal = rdtrData.koefisien || rdtrData.kdb;
-            if (kdbVal) {
-                pdf.text(`KDB (Koefisien Dasar Bangunan):`, margin, rdtrY);
-                pdf.text(String(kdbVal), margin + 80, rdtrY);
-                rdtrY += 6;
-            }
+            if (kdbVal) drawMetric("Koefisien Dasar Bangunan (KDB):", String(kdbVal));
+            
             const klbVal = rdtrData.klb;
-            if (klbVal) {
-                pdf.text(`KLB (Koefisien Lantai Bangunan):`, margin, rdtrY);
-                pdf.text(String(klbVal), margin + 80, rdtrY);
-                rdtrY += 6;
-            }
+            if (klbVal) drawMetric("Koefisien Lantai Bangunan (KLB):", String(klbVal));
+            
             const kdhVal = rdtrData.kdh;
-            if (kdhVal) {
-                pdf.text(`KDH (Koefisien Dasar Hijau):`, margin, rdtrY);
-                pdf.text(String(kdhVal), margin + 80, rdtrY);
-                rdtrY += 6;
-            }
+            if (kdhVal) drawMetric("Koefisien Dasar Hijau (KDH):", String(kdhVal));
+            
             const statusVal = rdtrData.status;
-            if (statusVal) {
-                pdf.text(`Status Kelayakan Ruang:`, margin, rdtrY);
-                pdf.text(String(statusVal), margin + 80, rdtrY);
-                rdtrY += 6;
-            }
+            if (statusVal) drawMetric("Status Kelayakan Ruang:", String(statusVal));
             
             rdtrY += 4;
             
             const luasVal = rdtrData.luas || rdtrData.area;
             if (luasVal) {
-                pdf.text(`Luas Pola Ruang:`, margin, rdtrY);
+                pdf.text(lang === 'id' ? 'Luas Analisis Lahan:' : 'Land Analysis Area:', margin, rdtrY);
+                pdf.setFont("helvetica", "bold");
                 pdf.text(`${Number(luasVal).toFixed(2)} Ha`, margin + 80, rdtrY);
+                pdf.setFont("helvetica", "normal");
                 rdtrY += 6;
             }
             if (rdtrData.dpp || rdtrData.wp) {
@@ -4716,11 +4731,10 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                     </h4>
                                     <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
                                         {lang === 'id' 
-                                            ? "Aktifkan mode Analisis Tata Ruang di bagian bawah bilah samping (atau klik tab RDTR) kemudian klik lokasi manapun di peta Bali (Denpasar, Badung, Gianyar, Tabanan). Aplikasi akan mencari data zonasi resmi, KDB, KLB, KDH, dan status perizinan lahan tersebut."
-                                            : "Activate Spatial Planning Analysis at the bottom of the sidebar (or switch to the RDTR tab) and click any location on the Bali map. The app retrieves official zoning data, allowable build covenants (KDB, KLB, KDH), and planning rules."}
+                                            ? "Analisis Tata Ruang bekerja di latar belakang saat Anda menentukan titik. Untuk melihat rincian lengkap, klik tab RDTR. Aplikasi akan menarik data zonasi resmi, deskripsi peruntukan, KDB, KLB, KDH, dan status perizinan lahan tersebut secara otomatis."
+                                            : "Spatial Analysis works in the background as you plot points. To see full details, switch to the RDTR tab. The app automatically retrieves official zoning data, usage descriptions, build covenants (KDB, KLB, KDH), and compliance status."}
                                     </p>
                                 </div>
-
                                 {/* Step 5: Exporting & DXF */}
                                 <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
                                     <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-rose-600">
@@ -4728,8 +4742,8 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                     </h4>
                                     <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
                                         {lang === 'id' 
-                                            ? "Klik 'Ekspor Data' untuk menghasilkan laporan analisis PDF profesional yang lengkap dengan tangkapan layar peta, daftar batas titik, dan rincian kavling. Anda juga dapat mengunduh file DXF CAD bawaan atau koordinat mentah GeoJSON/CSV."
-                                            : "Click 'Export Data' to generate a professional PDF analysis report containing map snapshots, vertex boundaries coordinates list, and kavling sub-plots. You can also download native DXF CAD files, GeoJSON, or CSV files."}
+                                            ? "Hasilkan laporan analisis PDF profesional yang lengkap dengan header zonasi berwarna, tangkapan layar peta, metrik regulasi terstruktur, dan rincian kavling. Anda juga dapat mengunduh file DXF CAD bawaan atau koordinat mentah GeoJSON/CSV."
+                                            : "Generate professional PDF analysis reports complete with colored zoning headers, map snapshots, structured regulation metrics, and kavling sub-plots. You can also download native DXF CAD files, GeoJSON, or CSV files."}
                                     </p>
                                 </div>
                             </div>
@@ -5725,20 +5739,6 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                       </div>
                     </div>
 
-                    {/* Optional Land Use Purpose Input */}
-                    <div className="bg-[var(--color-surface)] p-3 rounded-xl border border-[var(--color-fg)]/10 space-y-1.5 shadow-sm">
-                      <label className="text-[9px] uppercase opacity-45 font-bold block tracking-wider">
-                        {lang === 'id' ? 'TUJUAN PENGGUNAAN LAHAN (OPSIONAL)' : 'LAND USE PURPOSE (OPTIONAL)'}
-                      </label>
-                      <input
-                        type="text"
-                        value={rdtrTujuanLahan}
-                        onChange={(e) => setRdtrTujuanLahan(e.target.value)}
-                        placeholder={lang === 'id' ? 'Contoh: Villa, Resort, Toko, Ruko, dll' : 'e.g. Villa, Resort, Shop...'}
-                        className="w-full bg-[var(--color-bg)] text-[11px] px-3 py-2 rounded-lg border border-[var(--color-fg)]/15 focus:outline-none focus:border-fuchsia-500 font-medium"
-                      />
-                    </div>
-
                     {/* Action buttons (Favorites, PDF Export, & Clear Point) */}
                     <div className="space-y-2">
                       <div className="grid grid-cols-2 gap-2">
@@ -6050,33 +6050,6 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   </div>
                 </div>
               )}
-
-              {/* High-Contrast Premium RDTR Tool Button */}
-              <button 
-                title={lang === 'id' ? "Aktifkan klik peta untuk analisis rencana zonasi tata ruang RDTR Bali" : "Activate map-click mode for official Bali RDTR zoning analysis"}
-                onClick={() => {
-                  const next = !isRdtrActive;
-                  setIsRdtrActive(next);
-                  if (next) {
-                    setIsFreehand(false);
-                    setIsEditMode(false);
-                    setIsMeasuring(false);
-                    setIsAddingMarker(false);
-                    setIsAutoDetect(false);
-                    setSidebarActiveTab('rdtr');
-                  } else {
-                    setSidebarActiveTab('kavling');
-                  }
-                }}
-                className={`w-full py-3.5 rounded-xl text-[10px] uppercase tracking-widest font-display font-extrabold transition-all duration-300 flex justify-center items-center gap-2 cursor-pointer ${
-                  isRdtrActive 
-                    ? 'bg-fuchsia-600 text-white shadow-lg border border-fuchsia-500 scale-[1.01]' 
-                    : 'bg-[var(--color-surface)] border border-[var(--color-fg)]/10 text-[var(--color-fg)]/80 hover:bg-[var(--color-fg)]/5 hover:border-[var(--color-fg)]/20 shadow-sm'
-                }`}
-              >
-                <Layers size={13} strokeWidth={2.5} className={isRdtrActive ? 'animate-pulse' : ''} />
-                {isRdtrActive ? "RDTR INTERAKTIF: AKTIF" : "LIHAT RDTR INTERAKTIF"}
-              </button>
 
               {showGuideMode && (
                 <div className="text-[9px] font-semibold text-fuchsia-700 dark:text-fuchsia-300 bg-fuchsia-500/10 border border-fuchsia-500/20 p-2.5 rounded-xl leading-relaxed text-left">
@@ -6723,7 +6696,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                           color: LAND_USE_OPTIONS.find(o => o.value === landUseType)?.color || '#FFFFFF', 
                           fillColor: LAND_USE_OPTIONS.find(o => o.value === landUseType)?.color || '#FFFFFF', 
                           fillOpacity: 0.4,
-                          weight: 2,
+                          weight: 4,
                           lineJoin: 'miter'
                         }} 
                         eventHandlers={{ 
@@ -7081,7 +7054,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   color: rdtrResult.color || '#d946ef',
                   fillColor: rdtrResult.color || '#d946ef',
                   fillOpacity: 0.28,
-                  weight: 2,
+                  weight: 4,
                   dashArray: '3, 4',
                   lineJoin: 'miter'
                 })}
@@ -7183,15 +7156,15 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
           </div>
 
           <div className="mt-8 border-t border-[var(--color-fg)]/10 pt-4">
-            <label className="text-[12px] uppercase opacity-40 flex items-center mb-2 font-bold justify-between">
+            <label className="text-[12px] uppercase opacity-60 flex items-center mb-2 font-bold justify-between text-[var(--color-fg)]">
               <span>Estimated Land Value</span>
               <div className="flex items-center gap-2">
-                 <span className="opacity-60 text-[10px] lowercase">Rp / {areaUnit}</span>
+                 <span className="opacity-80 text-[10px] lowercase font-semibold text-[var(--color-fg)]">Rp / {areaUnit}</span>
                  <input 
                    type="number"
                    value={pricePerUnit || ''}
                    onChange={e => setPricePerUnit(Number(e.target.value))}
-                   className="w-24 px-1 py-0.5 text-right bg-transparent border-b border-[var(--color-fg)]/20 focus:outline-none focus:border-[var(--color-fg)] text-[12px] font-mono text-[var(--color-fg)]"
+                   className="w-24 px-1 py-0.5 text-right bg-transparent border-b-2 border-[var(--color-fg)]/40 focus:outline-none focus:border-[var(--color-accent)] text-[13px] font-mono text-[var(--color-fg)] font-bold placeholder:opacity-50"
                    placeholder="0"
                   />
               </div>
@@ -7199,7 +7172,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
             <div className="text-2xl lg:text-3xl font-display font-extrabold tracking-tight text-emerald-600 dark:text-emerald-400">
               {pricePerUnit > 0 
                 ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(pricePerUnit * (areaUnit === 'are' ? stats.areaAre : areaUnit === 'ha' ? stats.areaHectares : stats.areaSqMeters))
-                : <span className="opacity-30">Rp 0,00</span>
+                : <span className="opacity-40">Rp 0,00</span>
               }
             </div>
             {njopEstimate && (

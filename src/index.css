@@ -85,3 +85,10 @@ body {
   background: rgba(15, 23, 42, 0.16);
 }
 
+/* Poligon Lahan Outline Styling */
+.leaflet-interactive.leaflet-polygon {
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 1px rgba(0,0,0,0.3));
+}
+
