@@ -1034,7 +1034,7 @@ export default function App() {
   
   // Export Settings State
   const [exportClientName, setExportClientName] = useState("");
-  const [exportNIB, setExportNIB] = useState("");
+  const [exportRegionRef, setExportRegionRef] = useState("");
   const [exportSurveyor, setExportSurveyor] = useState("");
   const [exportNotes, setExportNotes] = useState("");
   const [pricePerUnit, setPricePerUnit] = useState<number>(0);
@@ -2464,7 +2464,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
             day: 'numeric', month: 'long', year: 'numeric',
             hour: '2-digit', minute: '2-digit'
         }).format(new Date());
-        const projectRef = exportNIB ? `NIB-${exportNIB}` : `GEO-${Date.now().toString().slice(-6)}`;
+        const projectRef = exportRegionRef ? `REF-${exportRegionRef}` : `REF-${Date.now().toString().slice(-6)}`;
 
         const drawHeader = (pageNum: number) => {
             pdf.setFont("helvetica", "bold");
@@ -2489,6 +2489,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
             pdf.setFontSize(8);
             pdf.setTextColor(150);
             pdf.text(`Prepared by ${exportSurveyor || "Rifky Rangga"}`, margin, pdfHeight - 10);
+            pdf.text("Dibuat di Calcuare (calcuare.web.id)", pdfWidth - margin, pdfHeight - 10, { align: "right" });
         };
 
         // --- PAGE 1: GEOMETRY SKETCH ---
@@ -2518,7 +2519,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
         };
         
         summaryY += drawGridRow(lang === 'id' ? "Klien / Pemilik:" : "Client / Owner:", exportClientName || "-", summaryY);
-        if (exportNIB) summaryY += drawGridRow(lang === 'id' ? "NIB / Sertifikat:" : "NIB / Cert:", exportNIB, summaryY);
+        if (exportRegionRef) summaryY += drawGridRow(lang === 'id' ? "Kode Referensi Wilayah:" : "Region Reference Code:", exportRegionRef, summaryY);
         summaryY += drawGridRow(lang === 'id' ? "Lokasi:" : "Location:", locName, summaryY);
         if (exportNotes) summaryY += drawGridRow(lang === 'id' ? "Catatan Lapangan:" : "Field Notes:", exportNotes, summaryY);
         
@@ -3002,14 +3003,28 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
             pdf.setFont("helvetica", "bold");
             pdf.setFontSize(12);
             pdf.setTextColor(rdtrR, rdtrG, rdtrB);
-            pdf.text(rdtrData.namobj || "Zona Tidak Terdefinisi", margin + 8, rdtrY + 5);
+            const zoneTitle = rdtrData.zona || rdtrData.namobj || "Zona Tidak Terdefinisi";
+            pdf.text(zoneTitle, margin + 8, rdtrY + 5);
             
             pdf.setFont("helvetica", "normal");
             pdf.setFontSize(10);
             pdf.setTextColor(50, 50, 50);
-            pdf.text(`${lang === 'id' ? 'Rencana Pola Ruang:' : 'Spatial Plan Pattern:'} ${rdtrData.remark || "-"}`, margin + 8, rdtrY + 12);
+            pdf.text(`${lang === 'id' ? 'Kode Zona:' : 'Zone Code:'} ${rdtrData.kode || "-"}`, margin + 8, rdtrY + 12);
             rdtrY += 25;
             
+            // Add description (as requested by user)
+            if (rdtrData.deskripsi) {
+                pdf.setFont("helvetica", "bold");
+                pdf.setFontSize(11);
+                pdf.text(lang === 'id' ? "DESKRIPSI / PERUNTUKAN:" : "DESCRIPTION / PURPOSE:", margin, rdtrY);
+                rdtrY += 7;
+                pdf.setFont("helvetica", "normal");
+                pdf.setFontSize(10);
+                const splitDesc = pdf.splitTextToSize(rdtrData.deskripsi, availableWidth);
+                pdf.text(splitDesc, margin, rdtrY);
+                rdtrY += (splitDesc.length * 5) + 12;
+            }
+
             pdf.setFont("helvetica", "bold");
             pdf.setFontSize(11);
             pdf.text(lang === 'id' ? "METRIK REGULASI" : "REGULATION METRICS", margin, rdtrY);
@@ -3018,27 +3033,37 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
             pdf.setFont("helvetica", "normal");
             pdf.setFontSize(10);
             
-            if (rdtrData.kdb) {
+            const kdbVal = rdtrData.koefisien || rdtrData.kdb;
+            if (kdbVal) {
                 pdf.text(`KDB (Koefisien Dasar Bangunan):`, margin, rdtrY);
-                pdf.text(String(rdtrData.kdb), margin + 80, rdtrY);
+                pdf.text(String(kdbVal), margin + 80, rdtrY);
                 rdtrY += 6;
             }
-            if (rdtrData.klb) {
+            const klbVal = rdtrData.klb;
+            if (klbVal) {
                 pdf.text(`KLB (Koefisien Lantai Bangunan):`, margin, rdtrY);
-                pdf.text(String(rdtrData.klb), margin + 80, rdtrY);
+                pdf.text(String(klbVal), margin + 80, rdtrY);
                 rdtrY += 6;
             }
-            if (rdtrData.kdh) {
+            const kdhVal = rdtrData.kdh;
+            if (kdhVal) {
                 pdf.text(`KDH (Koefisien Dasar Hijau):`, margin, rdtrY);
-                pdf.text(String(rdtrData.kdh), margin + 80, rdtrY);
+                pdf.text(String(kdhVal), margin + 80, rdtrY);
+                rdtrY += 6;
+            }
+            const statusVal = rdtrData.status;
+            if (statusVal) {
+                pdf.text(`Status Kelayakan Ruang:`, margin, rdtrY);
+                pdf.text(String(statusVal), margin + 80, rdtrY);
                 rdtrY += 6;
             }
             
             rdtrY += 4;
             
-            if (rdtrData.luas) {
+            const luasVal = rdtrData.luas || rdtrData.area;
+            if (luasVal) {
                 pdf.text(`Luas Pola Ruang:`, margin, rdtrY);
-                pdf.text(`${rdtrData.luas.toFixed(2)} Ha`, margin + 80, rdtrY);
+                pdf.text(`${Number(luasVal).toFixed(2)} Ha`, margin + 80, rdtrY);
                 rdtrY += 6;
             }
             if (rdtrData.dpp || rdtrData.wp) {
@@ -3149,6 +3174,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
                 pdf.setFontSize(8);
                 pdf.setTextColor(150);
                 pdf.text(`Prepared by ${exportSurveyor || "Rifky Rangga"}`, margin, pdfHeight - 10);
+                pdf.text("Dibuat di Calcuare (calcuare.web.id)", pdfWidth - margin, pdfHeight - 10, { align: "right" });
             };
 
             drawHeader(1);
@@ -3176,7 +3202,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
             
             summaryY += drawGridRow(lang === 'id' ? "Nama Proyek:" : "Project Name:", proj.name || "-", summaryY);
             summaryY += drawGridRow(lang === 'id' ? "Klien / Pemilik:" : "Client / Owner:", exportClientName || "-", summaryY);
-            if (exportNIB) summaryY += drawGridRow(lang === 'id' ? "NIB / Sertifikat:" : "NIB / Cert:", exportNIB, summaryY);
+            if (exportRegionRef) summaryY += drawGridRow(lang === 'id' ? "Kode Referensi Wilayah:" : "Region Reference Code:", exportRegionRef, summaryY);
             if (exportNotes) summaryY += drawGridRow(lang === 'id' ? "Catatan Lapangan:" : "Field Notes:", exportNotes, summaryY);
             
             summaryY += 4;
@@ -3999,6 +4025,14 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
     });
     
     // Save report
+    // Footer text
+    const pageHeight = doc.internal.pageSize.height;
+    const pageWidth = doc.internal.pageSize.width;
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text("Dibuat di Calcuare (calcuare.web.id)", pageWidth - 15, pageHeight - 10, { align: 'right' });
+
     doc.save(`Laporan_RDTR_${result.kode}_${result.lat.toFixed(5)}.pdf`);
   };
 
@@ -4059,6 +4093,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
       };
 
       setRdtrResult(resultObj);
+      setExportRegionRef(resultObj.kode);
 
       // Save in history (avoid duplicates)
       setRdtrHistory(prev => {
@@ -5301,9 +5336,9 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                         />
                                         <input
                                             type="text"
-                                            placeholder="NIB / Certificate Number"
-                                            value={exportNIB}
-                                            onChange={(e) => setExportNIB(e.target.value)}
+                                            placeholder="Kode Referensi Wilayah / Sertifikat"
+                                            value={exportRegionRef}
+                                            onChange={(e) => setExportRegionRef(e.target.value)}
                                             className="w-full p-2 text-[12px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)]"
                                         />
                                         <input
