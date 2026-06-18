@@ -1540,12 +1540,12 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
 
   useEffect(() => {
     if (points.length > 0) {
-      setShowRdtr(true);
+      // setShowRdtr(true); // Disabled automatic trigger
       setSidebarActiveTab('rdtr');
       setIsRdtrActive(true);
       handleMapClickForRdtr(points[0].lat, points[0].lng);
     } else if (points.length === 0) {
-      setShowRdtr(false);
+      // setShowRdtr(false); // Disabled automatic trigger
       setRdtrResult(null);
       setRdtrClickedPoint(null);
     }
