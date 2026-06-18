@@ -1298,8 +1298,6 @@ export default function App() {
 
   // Reverse Geocoding State (ArcGIS Integration)
   const [reverseGeocodeAddress, setReverseGeocodeAddress] = useState<string>('');
-  const [rdtrQuickInfo, setRdtrQuickInfo] = useState<{ zona: string, kode: string, color: string } | null>(null);
-  const [rdtrQuickInfoPos, setRdtrQuickInfoPos] = useState<{ x: number, y: number } | null>(null);
   const [isGeocoding, setIsGeocoding] = useState<boolean>(false);
 
   const fetchAddressForCoordinates = useCallback(async (lat: number, lng: number) => {
@@ -4153,47 +4151,6 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
         setIsAddingMarker(false); 
       }
     });
-    return null;
-  };
-
-  const RdtrHoverHandler = ({ active }: { active: boolean }) => {
-    const timeoutRef = useRef<any>(null);
-
-    useMapEvents({
-      mousemove: (e) => {
-        if (!active) {
-          if (rdtrQuickInfo) {
-            setRdtrQuickInfo(null);
-            setRdtrQuickInfoPos(null);
-          }
-          return;
-        }
-
-        const { x, y } = e.containerPoint;
-        setRdtrQuickInfoPos({ x, y });
-
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        
-        timeoutRef.current = setTimeout(() => {
-          try {
-            // Speed up with local detection logic first for instant feel in common areas
-            const localZoning = getZoningForCoordinate(e.latlng.lat, e.latlng.lng, selectedRdtrWilayah);
-            setRdtrQuickInfo({
-              zona: localZoning.zona,
-              kode: localZoning.kode,
-              color: localZoning.color
-            });
-          } catch (err) {
-            setRdtrQuickInfo(null);
-          }
-        }, 50);
-      },
-      mouseout: () => {
-        setRdtrQuickInfo(null);
-        setRdtrQuickInfoPos(null);
-      }
-    });
-
     return null;
   };
 
@@ -7132,7 +7089,6 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
             )}
 
             <MarkerHandler active={isAddingMarker} />
-            <RdtrHoverHandler active={isRdtrActive} />
             <MapClickHandler disabled={isFreehand || isEditMode || isMeasuring || isAddingMarker} autoDetectActive={isAutoDetect} />
             <FreehandHandler 
                 active={isFreehand} 
@@ -7149,36 +7105,6 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                 lang={lang}
             />
             </MapContainer>
-
-            {/* RDTR Quick Info Tooltip */}
-            <AnimatePresence>
-                {rdtrQuickInfo && rdtrQuickInfoPos && (
-                    <motion.div
-                        initial={{ opacity: 0, scale: 0.9, y: 5 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.9, y: 5 }}
-                        style={{
-                            position: 'absolute',
-                            left: rdtrQuickInfoPos.x + 15,
-                            top: rdtrQuickInfoPos.y + 15,
-                            zIndex: 10000,
-                            pointerEvents: 'none'
-                        }}
-                        className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border border-slate-200 dark:border-slate-800 rounded-lg shadow-2xl p-3 flex flex-col gap-1 min-w-[140px]"
-                    >
-                        <div className="flex items-center gap-2">
-                            <div className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ backgroundColor: rdtrQuickInfo.color }}></div>
-                            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{rdtrQuickInfo.kode}</span>
-                        </div>
-                        <div className="text-[12px] font-bold text-slate-800 dark:text-slate-100 leading-tight">
-                            {rdtrQuickInfo.zona}
-                        </div>
-                        <div className="text-[9px] text-slate-400 dark:text-slate-500 italic mt-1">
-                            {lang === 'id' ? 'Klik untuk info detail' : 'Click for details'}
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
             </motion.div>
           )}
           </div>
