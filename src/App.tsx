@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, startTransition, useReducer } from 'react';
+import React, { useState, useEffect, useRef, useCallback, startTransition, useReducer, useMemo } from 'react';
 
 import { Map3D } from './components/Map3D';
 import { DXFPreview } from './components/DXFPreview';
@@ -395,6 +395,16 @@ const MapCameraController = ({ center }: { center: [number, number] | null }) =>
     return null;
 };
 
+// === Road Color Palettes ===
+const ROAD_COLOR_PALETTES = {
+  gray: { name: 'Abu-Abu Aspal', border: '#64748b', fill: '#cbd5e1' },
+  yellow: { name: 'Kuning Cerah', border: '#ca8a04', fill: '#fef08a' },
+  orange: { name: 'Orange Marka', border: '#ea580c', fill: '#ffedd5' },
+  red: { name: 'Merah Paving', border: '#b91c1c', fill: '#fee2e2' },
+  green: { name: 'Hijau Eco', border: '#16a34a', fill: '#dcfce7' },
+  blue: { name: 'Biru Sirkulasi', border: '#2563eb', fill: '#dbeafe' },
+};
+
 // === Land Use Settings ===
 const LAND_USE_OPTIONS = [
   { label: 'Residential', value: 'residential', color: '#3b82f6' },
@@ -476,7 +486,7 @@ function calculateTotalMeasureDistance(pts: [number, number][]) {
     return dist;
 }
 
-function calculateStats(points: {lat: number, lng: number}[]) {
+function calculateStats(points: {lat: number, lng: number}[], method: 'utm' | 'turf' = 'utm') {
   if (points.length < 3) {
     let edge: any[] = [];
     if (points.length === 2) {
@@ -484,7 +494,21 @@ function calculateStats(points: {lat: number, lng: number}[]) {
       const mid = turf.midpoint(turf.point([points[0].lng, points[0].lat]), turf.point([points[1].lng, points[1].lat]));
       edge.push({ distance: dist, midpoint: { lat: mid.geometry.coordinates[1], lng: mid.geometry.coordinates[0] } });
     }
-    return { areaSqMeters: 0, areaHectares: 0, areaAre: 0, perimeter: 0, length: 0, width: 0, longestLine: null, edges: edge };
+    return { 
+      areaSqMeters: 0, 
+      areaHectares: 0, 
+      areaAre: 0, 
+      perimeter: 0, 
+      length: 0, 
+      width: 0, 
+      longestLine: null, 
+      edges: edge,
+      areaSqMetersUTM: 0,
+      areaSqMetersTurf: 0,
+      perimeterUTM: 0,
+      perimeterTurf: 0,
+      isSelfIntersecting: false
+    };
   }
 
   const coords = points.map(p => [p.lng, p.lat]);
@@ -494,40 +518,56 @@ function calculateStats(points: {lat: number, lng: number}[]) {
   try {
     const polygon = turf.polygon([coords]);
 
-    // 1. Luas berbasis UTM (Shoelace formula) untuk akurasi lokal
-    let areaSqMeters = 0;
+    // 1. Turf Spherical Geometry (always calculated)
+    const areaSqMetersTurf = turf.area(polygon);
+    const perimeterTurf = turf.length(polygon, { units: 'meters' });
+
+    // 2. UTM Cartesian geometry
+    let areaSqMetersUTM = 0;
+    let perimeterUTM = 0;
+    let utmCoordsList: { easting: number; northing: number; zoneNum: number; zoneLetter: string }[] = [];
+    let usesUTM = false;
+
     try {
         const primaryZone = utm.fromLatLon(points[0].lat, points[0].lng).zoneNum;
-        const utmCoords = points.map(p => {
-             // forceZoneNum is the 3rd param for fromLatLon if available, 
-             // but let's check if the library supports it, or just use standard conversion
-             // Actually utm package from npm: utm.fromLatLon(lat, lon, zoneNum) handles forcing.
+        utmCoordsList = points.map(p => {
              return utm.fromLatLon(p.lat, p.lng, primaryZone);
         });
         
-        // Ensure same UTM zone
         let area = 0;
-        const n = utmCoords.length;
+        const n = utmCoordsList.length;
         for (let i = 0; i < n; i++) {
             const j = (i + 1) % n;
             // Shoelace calculation on Cartesian coordinates in meters
-            area += utmCoords[i].easting * utmCoords[j].northing;
-            area -= utmCoords[j].easting * utmCoords[i].northing;
+            area += utmCoordsList[i].easting * utmCoordsList[j].northing;
+            area -= utmCoordsList[j].easting * utmCoordsList[i].northing;
         }
-        areaSqMeters = Math.abs(area) / 2.0;
+        areaSqMetersUTM = Math.abs(area) / 2.0;
+
+        // Keliling (Perimeter) berbasis UTM Cartesian
+        for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            const dx = utmCoordsList[i].easting - utmCoordsList[j].easting;
+            const dy = utmCoordsList[i].northing - utmCoordsList[j].northing;
+            perimeterUTM += Math.sqrt(dx * dx + dy * dy);
+        }
+        usesUTM = true;
     } catch (e) {
-        // Fallback to Turf spherical geometry if UTM conversion fails (e.g. crossing zones badly)
-        areaSqMeters = turf.area(polygon);
+        // Fallback to Turf if UTM fails
+        areaSqMetersUTM = areaSqMetersTurf;
+        perimeterUTM = perimeterTurf;
     }
+    
+    // Choose active values based on user setting
+    const areaSqMeters = method === 'turf' ? areaSqMetersTurf : areaSqMetersUTM;
+    const perimeter = method === 'turf' ? perimeterTurf : perimeterUTM;
+    
     const areaHectares = areaSqMeters / 10000;
     const areaAre = areaSqMeters / 100;
 
     // Check for self intersections
     const kinks = turf.kinks(polygon);
     const isSelfIntersecting = kinks.features.length > 0;
-
-    // 2. Keliling (Perimeter)
-    const perimeter = turf.length(polygon, { units: 'meters' });
 
     // 3. Estimasi Panjang (Jarak terjauh antar titik manapun)
     let maxLength = 0;
@@ -537,9 +577,16 @@ function calculateStats(points: {lat: number, lng: number}[]) {
 
     for (let i = 0; i < points.length; i++) {
         for (let j = i + 1; j < points.length; j++) {
-            const pt1 = turf.point([points[i].lng, points[i].lat]);
-            const pt2 = turf.point([points[j].lng, points[j].lat]);
-            const dist = turf.distance(pt1, pt2, { units: 'meters' });
+            let dist = 0;
+            if (usesUTM && utmCoordsList.length === points.length && method === 'utm') {
+                const dx = utmCoordsList[i].easting - utmCoordsList[j].easting;
+                const dy = utmCoordsList[i].northing - utmCoordsList[j].northing;
+                dist = Math.sqrt(dx * dx + dy * dy);
+            } else {
+                const pt1 = turf.point([points[i].lng, points[i].lat]);
+                const pt2 = turf.point([points[j].lng, points[j].lat]);
+                dist = turf.distance(pt1, pt2, { units: 'meters' });
+            }
             if (dist > maxLength) {
                 maxLength = dist;
                 p1Coords = [points[i].lng, points[i].lat];
@@ -558,7 +605,7 @@ function calculateStats(points: {lat: number, lng: number}[]) {
 
         points.forEach(p => {
             const pt = turf.point([p.lng, p.lat]);
-            const dist = turf.pointToLineDistance(pt, longestLine, { units: 'meters' });
+            const dist = turf.pointToLineDistance(pt, longestLine!, { units: 'meters' });
             const ptBearing = turf.bearing(turf.point(p1Coords), pt);
 
             // Normalisasi perbedaan sudut (-180 ke 180) untuk menentukan posisi kiri/kanan
@@ -580,20 +627,62 @@ function calculateStats(points: {lat: number, lng: number}[]) {
     for (let i = 0; i < points.length; i++) {
         const p1 = points[i];
         const p2 = points[(i + 1) % points.length];
+        
+        let dist = 0;
+        if (usesUTM && utmCoordsList.length === points.length && method === 'utm') {
+            const pt1 = utmCoordsList[i];
+            const pt2 = utmCoordsList[(i + 1) % points.length];
+            const dx = pt1.easting - pt2.easting;
+            const dy = pt1.northing - pt2.northing;
+            dist = Math.sqrt(dx * dx + dy * dy);
+        } else {
+            const pt1 = turf.point([p1.lng, p1.lat]);
+            const pt2 = turf.point([p2.lng, p2.lat]);
+            dist = turf.distance(pt1, pt2, { units: 'meters' });
+        }
+        
         const pt1 = turf.point([p1.lng, p1.lat]);
         const pt2 = turf.point([p2.lng, p2.lat]);
-        const dist = turf.distance(pt1, pt2, { units: 'meters' });
         const mid = turf.midpoint(pt1, pt2);
+        
         edges.push({
             distance: dist,
             midpoint: { lat: mid.geometry.coordinates[1], lng: mid.geometry.coordinates[0] }
         });
     }
 
-    return { areaSqMeters, areaHectares, areaAre, perimeter, length: maxLength, width, longestLine, edges, isSelfIntersecting };
+    return { 
+      areaSqMeters, 
+      areaHectares, 
+      areaAre, 
+      perimeter, 
+      length: maxLength, 
+      width, 
+      longestLine, 
+      edges, 
+      isSelfIntersecting,
+      areaSqMetersUTM,
+      areaSqMetersTurf,
+      perimeterUTM,
+      perimeterTurf
+    };
   } catch (e) {
     console.error("Kesalahan dalam memproses poligon:", e);
-    return { areaSqMeters: 0, areaHectares: 0, areaAre: 0, perimeter: 0, length: 0, width: 0, longestLine: null, edges: [], isSelfIntersecting: false };
+    return { 
+      areaSqMeters: 0, 
+      areaHectares: 0, 
+      areaAre: 0, 
+      perimeter: 0, 
+      length: 0, 
+      width: 0, 
+      longestLine: null, 
+      edges: [], 
+      isSelfIntersecting: false,
+      areaSqMetersUTM: 0,
+      areaSqMetersTurf: 0,
+      perimeterUTM: 0,
+      perimeterTurf: 0
+    };
   }
 }
 
@@ -601,10 +690,22 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
   try {
     if (points.length < 3) return [];
     
-    const coords = points.map(p => [p.lng, p.lat]);
-    coords.push([...coords[0]]);
+    // 1. Determine UTM Zone
+    const zoneInfo = utm.fromLatLon(points[0].lat, points[0].lng);
+    const zoneNum = zoneInfo.zoneNum;
+    const zoneLetter = zoneInfo.zoneLetter;
 
-    const poly = turf.polygon([coords]);
+    // 2. Project points to UTM
+    const utmCoords = points.map(p => utm.fromLatLon(p.lat, p.lng, zoneNum));
+    const cx = utmCoords.reduce((sum, c) => sum + c.easting, 0) / utmCoords.length;
+    const cy = utmCoords.reduce((sum, c) => sum + c.northing, 0) / utmCoords.length;
+
+    // 3. Offset to local coordinates in meters around the centroid to avoid huge Turf values
+    const localCoords = utmCoords.map(c => [c.easting - cx, c.northing - cy]);
+    localCoords.push([...localCoords[0]]); // close loop for Turf
+
+    const rawPoly = turf.polygon([localCoords]);
+    const poly = turf.rewind(rawPoly, { mutate: false });
     const centroid = turf.centroid(poly);
     
     let maxDist = 0;
@@ -612,16 +713,16 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
     let fallbackEdgeMidpoint = null;
 
     for (let i = 0; i < points.length; i++) {
-        const p1 = points[i];
-        const p2 = points[(i+1) % points.length];
-        const d = turf.distance([p1.lng, p1.lat], [p2.lng, p2.lat]);
+        const p1 = localCoords[i];
+        const p2 = localCoords[i+1];
+        const dx = p2[0] - p1[0];
+        const dy = p2[1] - p1[1];
+        const d = Math.sqrt(dx*dx + dy*dy);
         if (d > maxDist) {
             maxDist = d;
-            fallbackAngle = turf.bearing([p1.lng, p1.lat], [p2.lng, p2.lat]);
-            fallbackEdgeMidpoint = turf.midpoint(
-                turf.point([p1.lng, p1.lat]), 
-                turf.point([p2.lng, p2.lat])
-            ).geometry.coordinates;
+            const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+            fallbackAngle = (90 - angleDeg + 360) % 360;
+            fallbackEdgeMidpoint = [(p1[0] + p2[0])/2, (p1[1] + p2[1])/2];
         }
     }
     
@@ -649,25 +750,52 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
     const entry = parseIndex(entryEdgeIndex);
     const exit = parseIndex(exitEdgeIndex);
 
-    if (entry && exit && entry.a !== exit.a) {
-        const p1In = points[entry.a];
-        const p1Out = points[entry.b];
-        const entryMid = turf.midpoint(turf.point([p1In.lng, p1In.lat]), turf.point([p1Out.lng, p1Out.lat])).geometry.coordinates;
+    // Helpers to compute area in Cartesians
+    const getCartesianArea = (feature: any): number => {
+        if (!feature) return 0;
+        const geom = feature.geometry || feature;
+        if (geom.type === 'MultiPolygon') {
+            let total = 0;
+            geom.coordinates.forEach((item: any) => {
+                total += getCartesianArea({ type: 'Polygon', coordinates: item });
+            });
+            return total;
+        }
+        const ring = geom.coordinates[0];
+        let area = 0;
+        const n = ring.length;
+        for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            area += ring[i][0] * ring[j][1];
+            area -= ring[j][0] * ring[i][1];
+        }
+        return Math.abs(area) / 2.0;
+    };
 
-        const p2In = points[exit.a];
-        const p2Out = points[exit.b];
-        const exitMid = turf.midpoint(turf.point([p2In.lng, p2In.lat]), turf.point([p2Out.lng, p2Out.lat])).geometry.coordinates;
+    if (entry && exit && entry.a !== exit.a) {
+        const p1In = localCoords[entry.a];
+        const p1Out = localCoords[entry.b];
+        const entryMid = [(p1In[0] + p1Out[0])/2, (p1In[1] + p1Out[1])/2];
+
+        const p2In = localCoords[exit.a];
+        const p2Out = localCoords[exit.b];
+        const exitMid = [(p2In[0] + p2Out[0])/2, (p2In[1] + p2Out[1])/2];
         
         edgeMidpoint = entryMid; // use entry point for Y-center
-        const lineBearing = turf.bearing(entryMid, exitMid);
-        // We want this line to be purely HORIZONTAL when rotated (East-West).
-        // A bearing of 90 is East. We want rotated bearing to be 90 or -90.
-        // rotationAngle = 90 - lineBearing -> line becomes 90.
+        const dx = exitMid[0] - entryMid[0];
+        const dy = exitMid[1] - entryMid[1];
+        const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+        const lineBearing = (90 - angleDeg + 360) % 360;
+        
+        // We want this line to be horizontal East-West.
         rotationAngle = 90 - lineBearing;
     } else if (entry) {
-        const p1 = points[entry.a];
-        const p2 = points[entry.b];
-        const angle = turf.bearing([p1.lng, p1.lat], [p2.lng, p2.lat]);
+        const p1 = localCoords[entry.a];
+        const p2 = localCoords[entry.b];
+        const dx = p2[0] - p1[0];
+        const dy = p2[1] - p1[1];
+        const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+        const angle = (90 - angleDeg + 360) % 360;
         
         if (layoutType === 'no_road_split_2') {
             rotationAngle = 90 - angle;
@@ -675,34 +803,29 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
             rotationAngle = -angle;
         }
         
-        edgeMidpoint = turf.midpoint(
-            turf.point([p1.lng, p1.lat]), 
-            turf.point([p2.lng, p2.lat])
-        ).geometry.coordinates;
+        edgeMidpoint = [(p1[0] + p2[0])/2, (p1[1] + p2[1])/2];
     }
     
-    const rotatedPoly = turf.transformRotate(poly, rotationAngle, { pivot: centroid });
+    // Rotate in Cartesian meters space (conformal, preserves shape exactly)
+    const rotatedPoly = turf.transformRotate(poly, rotationAngle, { pivot: centroid }) as any;
     const bbox = turf.bbox(rotatedPoly);
     const minX = bbox[0], minY = bbox[1], maxX = bbox[2], maxY = bbox[3];
     
-    const ptCenter = centroid.geometry.coordinates;
-    const rotatedMidpointPt = turf.transformRotate(turf.point(edgeMidpoint), rotationAngle, { pivot: centroid });
+    const ptCenter = (centroid as any).geometry.coordinates;
+    const rotatedMidpointPt = turf.transformRotate(turf.point(edgeMidpoint || [0,0]), rotationAngle, { pivot: centroid }) as any;
     const rotatedMidpoint = rotatedMidpointPt.geometry.coordinates;
     let centerY = rotatedMidpoint[1];
 
-    const lenX = turf.distance([minX, ptCenter[1]], [maxX, ptCenter[1]], { units: 'meters' });
-    const lenY = turf.distance([ptCenter[0], minY], [ptCenter[0], maxY], { units: 'meters' });
-    
-    const degXToMeter = lenX / Math.abs(maxX - minX);
-    const degYToMeter = lenY / Math.abs(maxY - minY);
-    
-    const roadWidthDeg = roadWidth / (degYToMeter || 1);
+    // Since we are in local Cartesian standard meters, 1 unit = 1 meter
+    const degXToMeter = 1.0;
+    const degYToMeter = 1.0;
+    const roadWidthDeg = roadWidth;
     
     // Find side slants
     let leftThetas: number[] = [];
     let rightThetas: number[] = [];
-    const rotCoords = rotatedPoly.geometry.coordinates[0];
-    for(let i = 0; i < rotCoords.length - 1; i++) {
+    const rotCoords = (rotatedPoly as any).geometry.coordinates[0];
+    for (let i = 0; i < rotCoords.length - 1; i++) {
         const p1 = rotCoords[i];
         const p2 = rotCoords[i+1];
         const dx = p2[0] - p1[0];
@@ -732,12 +855,23 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
         try {
             const rdFeature = turf.intersect(turf.featureCollection([rotatedPoly, roadBoxToIntersect]));
             if (rdFeature) {
-                const realRoad = turf.transformRotate(rdFeature, -rotationAngle, { pivot: centroid });
+                const realRoadLocal = turf.transformRotate(rdFeature, -rotationAngle, { pivot: centroid });
+                
+                // Unproject back to Lat-Lng
+                const geomType = realRoadLocal.geometry.type;
+                let ring = geomType === 'MultiPolygon' ? realRoadLocal.geometry.coordinates[0][0] : realRoadLocal.geometry.coordinates[0];
+                const unprojectedCoords = ring.map((pt: any) => {
+                     const easting = pt[0] + cx;
+                     const northing = pt[1] + cy;
+                     const latlon = utm.toLatLon(easting, northing, zoneNum, zoneLetter);
+                     return [latlon.longitude, latlon.latitude];
+                });
+                
                 newKavlings.push({
                     id: `road-${rId}`,
                     type: 'road',
-                    polygon: realRoad,
-                    area: turf.area(realRoad)
+                    polygon: turf.polygon([unprojectedCoords]),
+                    area: getCartesianArea(realRoadLocal)
                 });
             }
         } catch(e) {
@@ -745,9 +879,8 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
         }
     };
 
-
     const doSlice = (startY: number, endY: number, prefix: string, boundMinX: number = minX, boundMaxX: number = maxX) => {
-        const blockHeightMeters = Math.abs(endY - startY) * degYToMeter;
+        const blockHeightMeters = Math.abs(endY - startY);
         if (blockHeightMeters <= 2) return; 
         
         const spanY = (maxY - minY) * 1.5; 
@@ -755,11 +888,15 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
         const topY = Math.max(startY, endY) + spanY;
         const targetBbox = turf.bboxPolygon([boundMinX, Math.min(startY, endY), boundMaxX, Math.max(startY, endY)]);
         
-        const fullBlock = turf.intersect(turf.featureCollection([rotatedPoly, targetBbox]));
+        const fullBlock = turf.intersect(turf.featureCollection([rotatedPoly as any, targetBbox as any]) as any) as any;
         if (!fullBlock) return;
-        const blockArea = turf.area(fullBlock);
+        const blockArea = getCartesianArea(fullBlock);
         
+        const blockWidth = Math.abs(boundMaxX - boundMinX);
+        const maxLotsByFront = Math.max(1, Math.floor(blockWidth / minFront));
         let numLots = Math.max(1, Math.floor(blockArea / minArea));
+        numLots = Math.min(numLots, maxLotsByFront);
+
         if (targetAreas && targetAreas[`${prefix}-numLots`]) {
             numLots = targetAreas[`${prefix}-numLots`];
         }
@@ -769,7 +906,7 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
             defaultTargetArea = minArea;
         }
         
-        let startX = boundMinX - 0.0001; // start slightly before to cover edge
+        let startX = boundMinX - 1; // start slightly before to cover edge in meters
         let count = 0;
         
         for (let i = 0; i < numLots; i++) {
@@ -780,12 +917,12 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
             }
             targetArea = Math.max(1, targetArea);
             
-            let endX = boundMaxX + 0.0001;
+            let endX = boundMaxX + 1;
             
             if (i < numLots - 1) {
-                // binary search for endX such that area ~ targetArea
-                let lowX = startX + 0.000001;
-                let highX = boundMaxX + 0.0001;
+                // binary search for endX in meters
+                let lowX = startX + 0.1;
+                let highX = boundMaxX + 1;
                 for (let step = 0; step < 20; step++) {
                     const midX = (lowX + highX) / 2;
                     const lotPolyTest = turf.polygon([[
@@ -796,7 +933,7 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
                         [startX, botY]
                     ]]);
                     const testIntersect = turf.intersect(turf.featureCollection([fullBlock, lotPolyTest]));
-                    const testArea = testIntersect ? turf.area(testIntersect) : 0;
+                    const testArea = testIntersect ? getCartesianArea(testIntersect) : 0;
                     if (testArea < targetArea) lowX = midX;
                     else highX = midX;
                 }
@@ -815,47 +952,81 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
                 const intersectFeat = turf.intersect(turf.featureCollection([fullBlock, lotPoly]));
                 
                 if (intersectFeat) {
-                    const realLot = turf.transformRotate(intersectFeat, -rotationAngle, { pivot: centroid });
-                    const lotArea = turf.area(realLot);
+                    const realLotLocal = turf.transformRotate(intersectFeat, -rotationAngle, { pivot: centroid });
+                    const lotArea = getCartesianArea(realLotLocal);
                     
                     if (lotArea > 5) {
-                        const lotCenter = turf.centroid(realLot).geometry.coordinates; // [lng, lat]
+                        // Lot Centroid
+                        const lotCenterLocal = turf.centroid(realLotLocal).geometry.coordinates;
+                        const lotEasting = lotCenterLocal[0] + cx;
+                        const lotNorthing = lotCenterLocal[1] + cy;
+                        const lotCenterLatLng = utm.toLatLon(lotEasting, lotNorthing, zoneNum, zoneLetter);
+                        const lotCenter = [lotCenterLatLng.longitude, lotCenterLatLng.latitude];
                         
+                        // Unproject coordinates to Lat-Lng vertices
+                        const geomType = realLotLocal.geometry.type;
+                        let ring = geomType === 'MultiPolygon' ? realLotLocal.geometry.coordinates[0][0] : realLotLocal.geometry.coordinates[0];
+                        const unprojectedCoords = ring.map((pt: any) => {
+                             const easting = pt[0] + cx;
+                             const northing = pt[1] + cy;
+                             const latlon = utm.toLatLon(easting, northing, zoneNum, zoneLetter);
+                             return [latlon.longitude, latlon.latitude];
+                        });
+                        
+                        const realLotLatLng = turf.polygon([unprojectedCoords]);
+                        
+                        // Edge calculation in Cartesian meters
                         const lotEdges = [];
-                        const lotCoords: any[] = realLot.geometry.coordinates[0];
-                        for(let j=0; j<lotCoords.length-1; j++) {
-                            const p1 = turf.point(lotCoords[j]);
-                            const p2 = turf.point(lotCoords[j+1]);
-                            const dist = turf.distance(p1, p2, {units: 'meters'});
-                            if (dist >= 1) { // only show text for edges >= 1meter
-                                const mid = turf.midpoint(p1, p2);
-                                const bearing = turf.bearing(p1, p2);
+                        const lotCoordsLocal = ring;
+                        for (let j = 0; j < lotCoordsLocal.length - 1; j++) {
+                            const p1 = lotCoordsLocal[j];
+                            const p2 = lotCoordsLocal[j+1];
+                            const dx = p2[0] - p1[0];
+                            const dy = p2[1] - p1[1];
+                            const dist = Math.sqrt(dx*dx + dy*dy);
+                            if (dist >= 1) {
+                                const midX = (p1[0] + p2[0]) / 2;
+                                const midY = (p1[1] + p2[1]) / 2;
+                                const midEasting = midX + cx;
+                                const midNorthing = midY + cy;
+                                const midLatLng = utm.toLatLon(midEasting, midNorthing, zoneNum, zoneLetter);
+                                
+                                const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+                                const bearing = (90 - angleDeg + 360) % 360;
                                 let cssAngle = bearing - 90;
-                                // Keep text right-side up
                                 if (cssAngle > 90 || cssAngle < -90) {
                                     cssAngle += 180;
                                 }
                                 lotEdges.push({
                                     dist,
-                                    mid: mid.geometry.coordinates,
+                                    mid: [midLatLng.longitude, midLatLng.latitude],
                                     angle: cssAngle
                                 });
                             }
                         }
 
-                        // Calculate Setback (Garis Sempadan)
+                        // Setback buffer in standard Lat-Lng
                         let setbackPoly = null;
                         if (setbackGSB > 0) {
                             try {
-                                const buffered = turf.buffer(realLot, -setbackGSB, { units: 'meters' });
+                                const cleanLot = turf.rewind(realLotLatLng, { mutate: false });
+                                const buffered = turf.buffer(cleanLot as any, -setbackGSB, { units: 'meters' }) as any;
                                 if (buffered && turf.area(buffered) > 0) {
                                     setbackPoly = buffered;
                                 }
                             } catch(e) {}
                         }
 
-                        // Use a nicer numbering A1, A2 instead of top-1
-                        const finalPrefix = prefix === "top" ? "A" : "B";
+                        let finalPrefix = "A";
+                        if (prefix === "top") finalPrefix = "A";
+                        else if (prefix === "bot") finalPrefix = "B";
+                        else if (prefix === "mid") finalPrefix = "C";
+                        else if (prefix === "topL") finalPrefix = "A-L";
+                        else if (prefix === "topR") finalPrefix = "A-R";
+                        else if (prefix === "botL") finalPrefix = "B-L";
+                        else if (prefix === "botR") finalPrefix = "B-R";
+                        else finalPrefix = prefix.toUpperCase();
+
                         const lotDepthMeters = blockHeightMeters;
                         const lotFrontMeters = lotArea / blockHeightMeters;
                         
@@ -863,17 +1034,19 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
                             id: `${prefix}-${count}`,
                             label: `${finalPrefix}${count + 1}`,
                             type: lotArea >= minArea * 0.8 ? 'lot' : 'remnant',
-                            polygon: realLot,
+                            polygon: realLotLatLng,
                             setbackPolygon: setbackPoly,
                             area: lotArea,
-                            center: lotCenter, // [lng, lat]
+                            center: lotCenter,
                             widthStr: Math.round(lotFrontMeters),
                             depthStr: Math.round(lotDepthMeters),
                             edges: lotEdges
                         });
                     }
                 }
-            } catch(e) {}
+            } catch(e) {
+                console.warn("Slicing exception:", e);
+            }
             
             startX = endX;
             count++;
@@ -886,22 +1059,19 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
 
         const secondEntry = parseIndex(secondEntryEdgeIndex);
         if (secondEntry) {
-            const p2In = points[secondEntry.a];
-            const p2Out = points[secondEntry.b];
-            const secondMidpoint = turf.midpoint(
-                turf.point([p2In.lng, p2In.lat]), 
-                turf.point([p2Out.lng, p2Out.lat])
-            ).geometry.coordinates;
+            const p2In = localCoords[secondEntry.a];
+            const p2Out = localCoords[secondEntry.b];
+            const secondMidpoint = [(p2In[0]+p2Out[0])/2, (p2In[1]+p2Out[1])/2];
              
-            const rotatedSecondMidpointPt = turf.transformRotate(turf.point(secondMidpoint), rotationAngle, { pivot: centroid });
+            const rotatedSecondMidpointPt = turf.transformRotate(turf.point(secondMidpoint), rotationAngle, { pivot: centroid }) as any;
             const secondY = rotatedSecondMidpointPt.geometry.coordinates[1];
             
             topRoadY = Math.max(centerY, secondY);
             botRoadY = Math.min(centerY, secondY);
         }
 
-        insertRoad(turf.bboxPolygon([minX - 0.001, topRoadY - roadWidthDeg/2, maxX + 0.001, topRoadY + roadWidthDeg/2]), 't');
-        insertRoad(turf.bboxPolygon([minX - 0.001, botRoadY - roadWidthDeg/2, maxX + 0.001, botRoadY + roadWidthDeg/2]), 'b');
+        insertRoad(turf.bboxPolygon([minX - 1, topRoadY - roadWidthDeg/2, maxX + 1, topRoadY + roadWidthDeg/2]), 't');
+        insertRoad(turf.bboxPolygon([minX - 1, botRoadY - roadWidthDeg/2, maxX + 1, botRoadY + roadWidthDeg/2]), 'b');
         
         doSlice(minY, botRoadY - roadWidthDeg/2, "bot");
         doSlice(botRoadY + roadWidthDeg/2, topRoadY - roadWidthDeg/2, "mid");
@@ -909,21 +1079,23 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
         
     } else if (layoutType === 't_shape') {
         const centerX = (minX + maxX) / 2;
-        // Main horizontal road up to center
-        insertRoad(turf.bboxPolygon([minX - 0.001, centerY - roadWidthDeg/2, centerX + roadWidthDeg/2, centerY + roadWidthDeg/2]), 'h');
-        // Vertical road from center down/up
-        insertRoad(turf.bboxPolygon([centerX - roadWidthDeg/2, centerY - roadWidthDeg/2, centerX + roadWidthDeg/2, maxY + 0.001]), 'v');
+        // Main horizontal road entering from left up to the center vertical road
+        insertRoad(turf.bboxPolygon([minX - 1, centerY - roadWidthDeg/2, centerX + roadWidthDeg/2, centerY + roadWidthDeg/2]), 'h');
+        // Vertical road running fully from bottom edge to top edge (connecting 2 automatic exits)
+        insertRoad(turf.bboxPolygon([centerX - roadWidthDeg/2, minY - 1, centerX + roadWidthDeg/2, maxY + 1]), 'v');
         
-        doSlice(minY, centerY - roadWidthDeg/2, "bot"); // full bottom
-        doSlice(centerY + roadWidthDeg/2, maxY, "topL", minX, centerX - roadWidthDeg/2); // top left
-        doSlice(centerY + roadWidthDeg/2, maxY, "topR", centerX + roadWidthDeg/2, maxX); // top right
+        // Slivers divided into four quadrants surrounding the T-junction
+        doSlice(centerY + roadWidthDeg/2, maxY, "topL", minX, centerX - roadWidthDeg/2); 
+        doSlice(centerY + roadWidthDeg/2, maxY, "topR", centerX + roadWidthDeg/2, maxX); 
+        doSlice(minY, centerY - roadWidthDeg/2, "botL", minX, centerX - roadWidthDeg/2); 
+        doSlice(minY, centerY - roadWidthDeg/2, "botR", centerX + roadWidthDeg/2, maxX); 
         
     } else if (layoutType === 'no_road_split_2') {
         doSlice(minY, centerY, "bot");
         doSlice(centerY, maxY, "top");
     } else {
         // single_center
-        insertRoad(turf.bboxPolygon([minX - 0.001, centerY - roadWidthDeg / 2, maxX + 0.001, centerY + roadWidthDeg / 2]), '1');
+        insertRoad(turf.bboxPolygon([minX - 1, centerY - roadWidthDeg / 2, maxX + 1, centerY + roadWidthDeg / 2]), '1');
         doSlice(minY, centerY - roadWidthDeg/2, "bot");
         doSlice(centerY + roadWidthDeg/2, maxY, "top");
     }
@@ -1080,89 +1252,181 @@ export default function App() {
     try {
         let extractedPoints: {lat: number, lng: number}[] = [];
 
-        try {
-            const parsed = JSON.parse(importText);
-            
-            const findGeoJSONPoints = (obj: any) => {
-                if (!obj) return;
-                if (obj.type === 'FeatureCollection' && obj.features) {
-                    obj.features.forEach(findGeoJSONPoints);
-                } else if (obj.type === 'Feature' && obj.geometry) {
-                    findGeoJSONPoints(obj.geometry);
-                } else if ((obj.type === 'Polygon' || obj.type === 'MultiPolygon') && obj.coordinates) {
-                    let coordsArr = obj.type === 'Polygon' ? [obj.coordinates] : obj.coordinates;
-                    coordsArr.forEach((poly: any) => {
-                         if (poly.length > 0) {
-                             poly[0].forEach((coord: number[]) => {
-                                 if (coord.length >= 2) {
-                                     extractedPoints.push({ lng: coord[0], lat: coord[1] });
-                                 }
-                             });
-                         }
-                    });
-                }
-            };
-            
-            findGeoJSONPoints(parsed);
+        // Check if it's DXF formatted text
+        const isDxf = importText.includes("SECTION") || importText.includes("HEADER") || importText.includes("LWPOLYLINE") || importText.includes("POLYLINE") || importText.includes("VERTEX");
 
-            if (extractedPoints.length === 0) {
-                if (Array.isArray(parsed)) {
-                    parsed.forEach(p => {
-                        if (p.lat && p.lng) extractedPoints.push({ lat: parseFloat(p.lat), lng: parseFloat(p.lng) });
-                        else if (p.latitude && p.longitude) extractedPoints.push({ lat: parseFloat(p.latitude), lng: parseFloat(p.longitude) });
-                        else if (Array.isArray(p) && p.length >= 2) {
-                             if (Math.abs(p[0]) > 90) extractedPoints.push({ lat: p[1], lng: p[0] });
-                             else extractedPoints.push({ lat: p[0], lng: p[1] });
-                        }
-                    });
-                }
-            }
-            
-            if (extractedPoints.length === 0) {
-                 const extractDeepCoords = (obj: any) => {
-                     if (!obj || typeof obj !== 'object') return;
-                     if (Array.isArray(obj)) {
-                         obj.forEach(extractDeepCoords);
-                     } else {
-                         if (obj.lat && obj.lng) extractedPoints.push({lat: parseFloat(obj.lat), lng: parseFloat(obj.lng)});
-                         else {
-                             for (let key in obj) {
-                                 if (key === 'coordinates' && Array.isArray(obj[key]) && obj[key].length > 0 && Array.isArray(obj[key][0])) {
-                                      obj[key][0].forEach((c:any) => {
-                                           if(Array.isArray(c) && c.length>=2) {
-                                                if (c[0] > -90 && c[0] < 90 && c[1] > -180 && c[1] < 180 && c[0] !== c[1]) {
-                                                     if (Math.abs(c[0]) > 90) extractedPoints.push({lat: c[1], lng: c[0]});
-                                                     else extractedPoints.push({lat: c[0], lng: c[1]});
-                                                }
-                                           }
-                                      });
-                                 }
-                                 else {
-                                      extractDeepCoords(obj[key]);
-                                 }
+        if (isDxf) {
+             const lines = importText.split(/\r?\n/).map(l => l.trim());
+             const dxfPointsList: {x: number, y: number}[] = [];
+             
+             let i = 0;
+             while (i < lines.length) {
+                 const code = lines[i];
+                 const val = lines[i+1];
+                 if (code === '0' && (val === 'VERTEX' || val === 'LWPOLYLINE')) {
+                     let x: number | null = null;
+                     let y: number | null = null;
+                     i += 2;
+                     while (i < lines.length && lines[i] !== '0') {
+                         const k = lines[i];
+                         const v = lines[i+1];
+                         if (k === '10') x = parseFloat(v);
+                         else if (k === '20') y = parseFloat(v);
+                         i += 2;
+                     }
+                     if (x !== null && y !== null && !isNaN(x) && !isNaN(y)) {
+                         dxfPointsList.push({ x, y });
+                     }
+                 } else {
+                     i++;
+                 }
+             }
+             
+             if (dxfPointsList.length > 0) {
+                 let zoneNum = 50;
+                 let zoneLetter = 'S';
+                 if (points && points.length > 0) {
+                     try {
+                         const z = utm.fromLatLon(points[0].lat, points[0].lng);
+                         zoneNum = z.zoneNum;
+                         zoneLetter = z.zoneLetter;
+                     } catch(e) {}
+                 }
+                 
+                 extractedPoints = dxfPointsList.map(pt => {
+                     try {
+                         const latlon = utm.toLatLon(pt.x, pt.y, zoneNum, zoneLetter);
+                         return { lat: latlon.latitude, lng: latlon.longitude };
+                     } catch(e) {
+                         return null;
+                     }
+                 }).filter(p => p !== null) as {lat: number, lng: number}[];
+             }
+        } else {
+             // Try standard JSON/GeoJSON parsing
+             try {
+                 const parsed = JSON.parse(importText);
+                 
+                 const findGeoJSONPoints = (obj: any) => {
+                     if (!obj) return;
+                     if (obj.type === 'FeatureCollection' && obj.features) {
+                         obj.features.forEach(findGeoJSONPoints);
+                     } else if (obj.type === 'Feature' && obj.geometry) {
+                         findGeoJSONPoints(obj.geometry);
+                     } else if ((obj.type === 'Polygon' || obj.type === 'MultiPolygon') && obj.coordinates) {
+                         let coordsArr = obj.type === 'Polygon' ? [obj.coordinates] : obj.coordinates;
+                         coordsArr.forEach((poly: any) => {
+                              if (poly.length > 0) {
+                                  poly[0].forEach((coord: number[]) => {
+                                      if (coord.length >= 2) {
+                                          extractedPoints.push({ lng: coord[0], lat: coord[1] });
+                                      }
+                                  });
+                              }
+                         });
+                     }
+                 };
+                 
+                 findGeoJSONPoints(parsed);
+
+                 if (extractedPoints.length === 0) {
+                     if (Array.isArray(parsed)) {
+                         parsed.forEach(p => {
+                             if (p.lat && p.lng) extractedPoints.push({ lat: parseFloat(p.lat), lng: parseFloat(p.lng) });
+                             else if (p.latitude && p.longitude) extractedPoints.push({ lat: parseFloat(p.latitude), lng: parseFloat(p.longitude) });
+                             else if (Array.isArray(p) && p.length >= 2) {
+                                  if (Math.abs(p[0]) > 90) extractedPoints.push({ lat: p[1], lng: p[0] });
+                                  else extractedPoints.push({ lat: p[0], lng: p[1] });
                              }
+                         });
+                     }
+                 }
+                 
+                 if (extractedPoints.length === 0) {
+                      const extractDeepCoords = (obj: any) => {
+                          if (!obj || typeof obj !== 'object') return;
+                          if (Array.isArray(obj)) {
+                              obj.forEach(extractDeepCoords);
+                          } else {
+                              if (obj.lat && obj.lng) extractedPoints.push({lat: parseFloat(obj.lat), lng: parseFloat(obj.lng)});
+                              else {
+                                  for (let key in obj) {
+                                      if (key === 'coordinates' && Array.isArray(obj[key]) && obj[key].length > 0 && Array.isArray(obj[key][0])) {
+                                           obj[key][0].forEach((c:any) => {
+                                                if(Array.isArray(c) && c.length>=2) {
+                                                     if (c[0] > -90 && c[0] < 90 && c[1] > -180 && c[1] < 180 && c[0] !== c[1]) {
+                                                          if (Math.abs(c[0]) > 90) extractedPoints.push({lat: c[1], lng: c[0]});
+                                                          else extractedPoints.push({lat: c[0], lng: c[1]});
+                                                     }
+                                                }
+                                           });
+                                      }
+                                      else {
+                                           extractDeepCoords(obj[key]);
+                                      }
+                                  }
+                              }
+                          }
+                      };
+                      extractDeepCoords(parsed);
+                 }
+             } catch (e) {
+                 // Regex fallback
+                 const regex = /(-?\d+\.\d+)[\s,;]+(-?\d+\.\d+)/g;
+                 let match;
+                 while ((match = regex.exec(importText)) !== null) {
+                     const a = parseFloat(match[1]);
+                     const b = parseFloat(match[2]);
+                     if (!isNaN(a) && !isNaN(b)) {
+                         if (Math.abs(a) <= 90 && Math.abs(b) >= 90) {
+                             extractedPoints.push({ lat: a, lng: b }); 
+                         } else if (Math.abs(b) <= 90 && Math.abs(a) >= 90) {
+                             extractedPoints.push({ lat: b, lng: a }); 
+                         } else {
+                             extractedPoints.push({ lat: a, lng: b });
                          }
                      }
                  }
-                 extractDeepCoords(parsed);
+             }
+        }
+
+        // Detect if coordinates are in UTM Easting/Northing and convert them
+        let hasLargeCoordinates = false;
+        extractedPoints.forEach(p => {
+            if (Math.abs(p.lat) > 10000 || Math.abs(p.lng) > 10000) {
+                hasLargeCoordinates = true;
             }
-        } catch (e) {
-            // Regex fallback
-            const regex = /(-?\d+\.\d+)[\s,;]+(-?\d+\.\d+)/g;
-            let match;
-            while ((match = regex.exec(importText)) !== null) {
-                const a = parseFloat(match[1]);
-                const b = parseFloat(match[2]);
-                if (!isNaN(a) && !isNaN(b)) {
-                    if (Math.abs(a) <= 90 && Math.abs(b) >= 90) {
-                        extractedPoints.push({ lat: a, lng: b }); 
-                    } else if (Math.abs(b) <= 90 && Math.abs(a) >= 90) {
-                        extractedPoints.push({ lat: b, lng: a }); 
-                    } else {
-                        extractedPoints.push({ lat: a, lng: b });
-                    }
-                }
-            }
+        });
+        
+        if (hasLargeCoordinates) {
+             let zoneNum = 50;
+             let zoneLetter = 'S';
+             if (points && points.length > 0) {
+                 try {
+                     const z = utm.fromLatLon(points[0].lat, points[0].lng);
+                     zoneNum = z.zoneNum;
+                     zoneLetter = z.zoneLetter;
+                 } catch(e) {}
+             }
+             
+             extractedPoints = extractedPoints.map(pt => {
+                 const first = pt.lat;
+                 const second = pt.lng;
+                 let easting = first;
+                 let northing = second;
+                 
+                 if (Math.abs(first) > 999999 && Math.abs(second) < 999999) {
+                     easting = second;
+                     northing = first;
+                 }
+                 
+                 try {
+                     const latlon = utm.toLatLon(easting, northing, zoneNum, zoneLetter);
+                     return { lat: latlon.latitude, lng: latlon.longitude };
+                 } catch(e) {
+                     return null;
+                 }
+             }).filter(p => p !== null) as {lat: number, lng: number}[];
         }
 
         if (extractedPoints.length > 0) {
@@ -1171,7 +1435,6 @@ export default function App() {
                 if(i === 0) return true;
                 return p.lat !== arr[i-1].lat || p.lng !== arr[i-1].lng;
             });
-            // remove last point if it's the same as first logic? GeoJSON does this. Let's keep it clean
             if(uniquePts.length > 3) {
                  const first = uniquePts[0];
                  const last = uniquePts[uniquePts.length - 1];
@@ -1188,7 +1451,7 @@ export default function App() {
             setMapCenter([uniquePts[0].lat, uniquePts[0].lng]);
             alert(`Berhasil mengimpor ${uniquePts.length} titik koordinat.`);
         } else {
-             setImportError("Tidak menemukan data koordinat valid. Pastikan format teks JSON, GeoJSON, atau list koordinat.");
+             setImportError("Tidak menemukan data koordinat valid. Pastikan format teks JSON, GeoJSON, DXF, atau list koordinat.");
         }
     } catch(e: any) {
         setImportError("Error processing: " + e.message);
@@ -1211,11 +1474,76 @@ export default function App() {
       cornerChamfer: false,
       maxDepth: 30,
       setbackGSB: 3,
-      optMode: 'maximize'
+      optMode: 'maximize',
+      roadColor: 'gray'
   });
   const [kavlings, setKavlings] = useState<any[]>([]);
   const [showKavlings, setShowKavlings] = useState(true);
   const [kavlingOverrides, setKavlingOverrides] = useState<Record<string, number>>({});
+  const [editingKavlingId, setEditingKavlingId] = useState<string | null>(null);
+  const [editingKavlingLabel, setEditingKavlingLabel] = useState<string>('');
+  const isSubdivided = useMemo(() => kavlings && kavlings.length > 0, [kavlings]);
+
+  // Tusuk Sate Heuristic Detection
+  const tusukSateIds = useMemo(() => {
+    const ids: string[] = [];
+    if (!kavlings || kavlings.length === 0) return ids;
+
+    const lots = kavlings.filter(k => k.type === 'lot');
+    if (lots.length === 0) return ids;
+
+    if (kavlingSettings.layoutType === 't_shape') {
+        const botLots = lots.filter(k => k.id.startsWith('bot-'));
+        if (botLots.length > 0) {
+            let minLng = Infinity, maxLng = -Infinity;
+            lots.forEach(l => {
+                if (l.center) {
+                    minLng = Math.min(minLng, l.center[0]);
+                    maxLng = Math.max(maxLng, l.center[0]);
+                }
+            });
+            const midLng = (minLng + maxLng) / 2;
+            const sortedByCenter = [...botLots].sort((a, b) => 
+                Math.abs((a.center?.[0] || 0) - midLng) - Math.abs((b.center?.[0] || 0) - midLng)
+            );
+            if (sortedByCenter[0]) {
+                ids.push(sortedByCenter[0].id);
+            }
+        }
+
+        const topRLots = lots.filter(k => k.id.startsWith('topR-'));
+        if (topRLots.length > 0) {
+            const sortedTopR = [...topRLots].sort((a, b) => {
+                const latDiffA = a.center?.[1] || 0;
+                const latDiffB = b.center?.[1] || 0;
+                return latDiffA - latDiffB;
+            });
+            if (sortedTopR[0]) {
+                ids.push(sortedTopR[0].id);
+            }
+        }
+    } else if (kavlingSettings.enableCulDeSac) {
+        const topLots = lots.filter(k => k.id.startsWith('top-'));
+        const botLots = lots.filter(k => k.id.startsWith('bot-'));
+
+        if (topLots.length > 0) {
+            const sortedTop = [...topLots].sort((a, b) => (a.center?.[0] || 0) - (b.center?.[0] || 0));
+            if (sortedTop[0]) ids.push(sortedTop[0].id);
+            if (sortedTop[sortedTop.length - 1] && sortedTop[sortedTop.length - 1].id !== sortedTop[0].id) {
+                ids.push(sortedTop[sortedTop.length - 1].id);
+            }
+        }
+        if (botLots.length > 0) {
+            const sortedBot = [...botLots].sort((a, b) => (a.center?.[0] || 0) - (b.center?.[0] || 0));
+            if (sortedBot[0]) ids.push(sortedBot[0].id);
+            if (sortedBot[sortedBot.length - 1] && sortedBot[sortedBot.length - 1].id !== sortedBot[0].id) {
+                ids.push(sortedBot[sortedBot.length - 1].id);
+            }
+        }
+    }
+
+    return ids;
+  }, [kavlings, kavlingSettings]);
 
   // New Feature States
   const [markers, setMarkers] = useState<{lat: number, lng: number, label: string, color?: string}[]>([]);
@@ -1566,10 +1894,22 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
 
   // Settings State
   const [units, setUnits] = useState<'metric' | 'imperial'>('metric');
-  const [wmsLayersList, setWmsLayersList] = useState<{name: string, layers: string}[]>([]);
+  const [wmsLayersList, setWmsLayersList] = useState<{
+    name: string;
+    layers: string;
+    opacity?: number;
+    hue?: number;
+    invert?: boolean;
+    visible?: boolean;
+  }[]>([]);
   const [showRdtr, setShowRdtr] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
+  const [hoveredKavlingId, setHoveredKavlingId] = useState<string | null>(null);
   const [areaUnit, setAreaUnit] = useState<'are' | 'ha' | 'sqm'>('are');
+  const [areaCalcMethod, setAreaCalcMethod] = useState<'utm' | 'turf'>(() => {
+    const saved = localStorage.getItem('calcare_area_calc_method');
+    return (saved === 'utm' || saved === 'turf') ? saved : 'utm';
+  });
   const [zoning, setZoning] = useState({ residential: 50, agricultural: 25, commercial: 25 });
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [lang, setLang] = useState<Language>('en');
@@ -1644,10 +1984,38 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
     localStorage.setItem('calcare_area_unit', areaUnit);
   }, [areaUnit]);
 
-  // Hardcoded GeoServer Layers
+  // Hardcoded GeoServer Layers with Persistence
   useEffect(() => {
-    setWmsLayersList(DEFAULT_WMS_LAYERS);
+    const saved = localStorage.getItem('calcare_wms_layers_config');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const merged = DEFAULT_WMS_LAYERS.map(defLayer => {
+            const match = parsed.find((l: any) => l.layers === defLayer.layers);
+            return match ? { ...defLayer, ...match } : { ...defLayer, opacity: 0.7, hue: 0, invert: false, visible: true };
+          });
+          setWmsLayersList(merged);
+          return;
+        }
+      } catch (e) {
+        console.error("Error parsing saved WMS config", e);
+      }
+    }
+    setWmsLayersList(DEFAULT_WMS_LAYERS.map(l => ({
+      ...l,
+      opacity: 0.7,
+      hue: 0,
+      invert: false,
+      visible: true
+    })));
   }, []);
+
+  useEffect(() => {
+    if (wmsLayersList.length > 0) {
+      localStorage.setItem('calcare_wms_layers_config', JSON.stringify(wmsLayersList));
+    }
+  }, [wmsLayersList]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1680,8 +2048,12 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
   }, [isDarkMode]);
 
   useEffect(() => {
-    setStats(calculateStats(points));
-  }, [points]);
+    localStorage.setItem('calcare_area_calc_method', areaCalcMethod);
+  }, [areaCalcMethod]);
+
+  useEffect(() => {
+    setStats(calculateStats(points, areaCalcMethod));
+  }, [points, areaCalcMethod]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1786,6 +2158,33 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
     }, 1500);
     return () => clearTimeout(t);
   }, [points, kavlings, kavlingOverrides, kavlingSettings]);
+
+  // Auto-recalculate kavlings when points or parameters change in real-time
+  useEffect(() => {
+    if (kavlings && kavlings.length > 0 && points.length >= 3) {
+      try {
+        const k = subdividePolygon(
+            points, 
+            kavlingSettings.roadWidth, 
+            kavlingSettings.minArea, 
+            kavlingSettings.minFront, 
+            kavlingSettings.entryEdgeIndex, 
+            kavlingSettings.exitEdgeIndex, 
+            kavlingSettings.layoutType,
+            kavlingSettings.enableCulDeSac,
+            kavlingSettings.cornerChamfer,
+            kavlingSettings.maxDepth,
+            kavlingSettings.setbackGSB,
+            kavlingSettings.optMode,
+            kavlingSettings.secondEntryEdgeIndex,
+            kavlingOverrides
+        );
+        setKavlings(k);
+      } catch (err) {
+        console.error("Auto calculation failed: ", err);
+      }
+    }
+  }, [points, kavlingSettings]);
 
 
 
@@ -2273,6 +2672,68 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
       }
       
       if (closeModal && activeModal === 'kavling') setActiveModal('none');
+  };
+
+  const applyKavlingPreset = (preset: {
+      minArea: number; 
+      minFront: number; 
+      roadWidth: number; 
+      layoutType: string; 
+      maxDepth: number; 
+      setbackGSB: number; 
+      optMode: string;
+      enableCulDeSac: boolean;
+      cornerChamfer: boolean;
+  }) => {
+      setKavlingSettings({
+          minArea: preset.minArea,
+          minFront: preset.minFront,
+          roadWidth: preset.roadWidth,
+          entryEdgeIndex: "-1",
+          exitEdgeIndex: "-1",
+          secondEntryEdgeIndex: "-1",
+          layoutType: preset.layoutType,
+          enableCulDeSac: preset.enableCulDeSac,
+          cornerChamfer: preset.cornerChamfer,
+          maxDepth: preset.maxDepth,
+          setbackGSB: preset.setbackGSB,
+          optMode: preset.optMode,
+          roadColor: kavlingSettings.roadColor || 'gray'
+      });
+
+      const k = subdividePolygon(
+          points, 
+          preset.roadWidth, 
+          preset.minArea, 
+          preset.minFront, 
+          "-1", 
+          "-1", 
+          preset.layoutType,
+          preset.enableCulDeSac,
+          preset.cornerChamfer,
+          preset.maxDepth,
+          preset.setbackGSB,
+          preset.optMode,
+          "-1",
+          {}
+      );
+      setKavlings(k);
+      setShowKavlings(true);
+      setKavlingOverrides({});
+
+      const newAreas: Record<string, number> = {};
+      const numLotsMap: Record<string, number> = {};
+      k.forEach(lot => {
+          if (lot.type !== 'road') {
+              newAreas[lot.id] = lot.area;
+              const prefix = lot.id.split('-')[0];
+              numLotsMap[prefix] = (numLotsMap[prefix] || 0) + 1;
+          }
+      });
+      Object.keys(numLotsMap).forEach(prefix => {
+          newAreas[`${prefix}-numLots`] = numLotsMap[prefix];
+      });
+      setKavlingOverrides(newAreas);
   };
 
   const handleAreaChange = (id: string, newArea: number) => {
@@ -4178,6 +4639,12 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
           handleMapClickForRdtr(e.latlng.lat, e.latlng.lng);
           return;
         }
+        if (isSubdivided) {
+          // klik tambah titik tidak berfungsi, klik berpindah ke fungsi kavling
+          setActiveModal('kavling');
+          setMobileTab('stats');
+          return;
+        }
         if (autoDetectActive) {
             setIsDetecting(true);
             try {
@@ -4928,6 +5395,36 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                             <hr className="border-[var(--color-fg)]/10" />
 
                             <div>
+                                <label className="text-[12px] uppercase opacity-40 block mb-3 font-bold">Metode Kalkulasi Luas Lahan</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        onClick={() => setAreaCalcMethod('utm')}
+                                        className={`py-2 px-3 text-[12px] font-mono border transition-all text-left flex flex-col justify-between h-20 ${
+                                            areaCalcMethod === 'utm' 
+                                            ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' 
+                                            : 'bg-transparent border-[var(--color-fg)]/20 opacity-75 hover:opacity-100 text-[var(--color-fg)]'
+                                        }`}
+                                    >
+                                        <div className="font-bold uppercase tracking-wider text-[10px]">UTM Cartesian (Lokal)</div>
+                                        <div className="text-[9px] opacity-65 leading-tight">Proyeksi kartesian lokal (Shoelace formula), presisi tinggi bidang tanah.</div>
+                                    </button>
+                                    <button
+                                        onClick={() => setAreaCalcMethod('turf')}
+                                        className={`py-2 px-3 text-[12px] font-mono border transition-all text-left flex flex-col justify-between h-20 ${
+                                            areaCalcMethod === 'turf' 
+                                            ? 'bg-[var(--color-fg)] text-[var(--color-bg)] border-[var(--color-fg)]' 
+                                            : 'bg-transparent border-[var(--color-fg)]/20 opacity-75 hover:opacity-100 text-[var(--color-fg)]'
+                                        }`}
+                                    >
+                                        <div className="font-bold uppercase tracking-wider text-[10px]">Turf.js Spherical (Sferis)</div>
+                                        <div className="text-[9px] opacity-65 leading-tight">Kalkulasi bola sferis bumi (WGS84), mengabaikan proyeksi lokal.</div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <hr className="border-[var(--color-fg)]/10" />
+
+                            <div>
                                 <label className="text-[12px] uppercase opacity-40 block mb-2">{t(lang, 'mapRenderStyle')}</label>
                                 <Toggle 
                                     checked={showGrid} 
@@ -4939,37 +5436,157 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                             <hr className="border-[var(--color-fg)]/10" />
 
                             <div>
-                                <label className="text-[12px] uppercase opacity-40 block mb-4">WMS Layer Config</label>
+                                <label className="text-[12px] uppercase opacity-40 block mb-3 font-bold">
+                                  {lang === 'id' ? 'Konfigurasi Layer WMS Individual' : 'Individual WMS Layer Config'}
+                                </label>
+                                <p className="text-[10px] opacity-60 mb-3 leading-relaxed">
+                                  {lang === 'id' 
+                                    ? 'Sesuaikan transparansi (opacity) dan filter warna (hue) untuk setiap overlay agar selaras sempurna dengan peta satelit.' 
+                                    : 'Adjust transparency (opacity) and color filter (hue) for each overlay to align perfectly with satellite imagery.'}
+                                </p>
+                                
                                 <div className="space-y-4">
-                                  <div>
-                                    <div className="flex justify-between mb-1">
-                                      <span className="text-[12px]">Opacity</span>
-                                      <span className="text-[12px] font-mono">{Math.round(wmsOpacity * 100)}%</span>
-                                    </div>
-                                    <input 
-                                      type="range" min="0" max="1" step="0.1"
-                                      value={wmsOpacity} onChange={(e) => setWmsOpacity(parseFloat(e.target.value))}
-                                      className="w-full accent-[var(--color-fg)]"
-                                    />
-                                  </div>
-                                  <div>
-                                    <div className="flex justify-between mb-1">
-                                      <span className="text-[12px]">Hue Filter</span>
-                                      <span className="text-[12px] font-mono">{wmsHue}deg</span>
-                                    </div>
-                                    <input 
-                                      type="range" min="0" max="360" step="10"
-                                      value={wmsHue} onChange={(e) => setWmsHue(parseFloat(e.target.value))}
-                                      className="w-full accent-[var(--color-fg)]"
-                                    />
-                                  </div>
-                                  <div>
-                                    <Toggle 
-                                      checked={wmsInvert} 
-                                      onChange={setWmsInvert} 
-                                      label="Invert Colors" 
-                                    />
-                                  </div>
+                                  {wmsLayersList.map((layer, idx) => {
+                                    const currentOpacity = layer.opacity !== undefined ? layer.opacity : 0.7;
+                                    const currentHue = layer.hue !== undefined ? layer.hue : 0;
+                                    const currentInvert = layer.invert !== undefined ? layer.invert : false;
+                                    const currentVisible = layer.visible !== false;
+
+                                    return (
+                                      <div key={idx} className="bg-[var(--color-fg)]/5 p-3 rounded border border-[var(--color-fg)]/10 space-y-3 text-left">
+                                        <div className="flex items-center justify-between border-b border-[var(--color-fg)]/10 pb-2">
+                                          <div className="flex items-center gap-2">
+                                            <input 
+                                              type="checkbox"
+                                              checked={currentVisible}
+                                              onChange={(e) => {
+                                                const checked = e.target.checked;
+                                                setWmsLayersList(prev => prev.map((l, i) => i === idx ? { ...l, visible: checked } : l));
+                                              }}
+                                              id={`wms-layer-visibility-${idx}`}
+                                              className="w-3.5 h-3.5 rounded border-[var(--color-fg)]/30 text-[var(--color-fg)] focus:ring-[var(--color-fg)] cursor-pointer"
+                                            />
+                                            <label htmlFor={`wms-layer-visibility-${idx}`} className="font-bold text-[11px] uppercase tracking-wider cursor-pointer">
+                                              🗺️ {layer.name}
+                                            </label>
+                                          </div>
+                                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-fg)]/10 text-[var(--color-fg)] font-mono uppercase tracking-widest">
+                                            {layer.layers}
+                                          </span>
+                                        </div>
+
+                                        {currentVisible ? (
+                                          <div className="space-y-3 pl-1">
+                                            {/* Opacity Slider */}
+                                            <div>
+                                              <div className="flex justify-between items-center mb-1">
+                                                <span className="text-[10px] font-medium opacity-70">
+                                                  {lang === 'id' ? 'Transparansi (Opacity):' : 'Transparency (Opacity):'}
+                                                </span>
+                                                <span className="text-[10px] font-mono font-bold bg-[var(--color-fg)]/10 px-1.5 py-0.5 rounded text-[var(--color-fg)]">
+                                                  {Math.round(currentOpacity * 100)}%
+                                                </span>
+                                              </div>
+                                              <input 
+                                                type="range" min="0" max="1" step="0.05"
+                                                value={currentOpacity} 
+                                                onChange={(e) => {
+                                                  const val = parseFloat(e.target.value);
+                                                  setWmsLayersList(prev => prev.map((l, i) => i === idx ? { ...l, opacity: val } : l));
+                                                }}
+                                                className="w-full h-1 bg-[var(--color-fg)]/10 rounded-lg appearance-none cursor-pointer accent-[var(--color-fg)]"
+                                              />
+                                            </div>
+
+                                            {/* Hue Slider */}
+                                            <div>
+                                              <div className="flex justify-between items-center mb-1">
+                                                <span className="text-[10px] font-medium opacity-70">
+                                                  {lang === 'id' ? 'Filter Hue (Rotasi Warna):' : 'Hue Rotation Filter:'}
+                                                </span>
+                                                <span className="text-[10px] font-mono font-bold bg-[var(--color-fg)]/10 px-1.5 py-0.5 rounded text-[var(--color-fg)]">
+                                                  {currentHue}°
+                                                </span>
+                                              </div>
+                                              <input 
+                                                type="range" min="0" max="360" step="5"
+                                                value={currentHue} 
+                                                onChange={(e) => {
+                                                  const val = parseInt(e.target.value);
+                                                  setWmsLayersList(prev => prev.map((l, i) => i === idx ? { ...l, hue: val } : l));
+                                                }}
+                                                className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-[var(--color-fg)]"
+                                                style={{
+                                                  background: 'linear-gradient(to right, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%)'
+                                                }}
+                                              />
+                                            </div>
+
+                                            {/* Invert Colors Toggle */}
+                                            <div className="flex items-center justify-between pt-1">
+                                              <span className="text-[10px] opacity-70">
+                                                {lang === 'id' ? 'Balikkan Warna (Invert):' : 'Invert Colors (Dark Mode style):'}
+                                              </span>
+                                              <button
+                                                onClick={() => {
+                                                  setWmsLayersList(prev => prev.map((l, i) => i === idx ? { ...l, invert: !currentInvert } : l));
+                                                }}
+                                                className={`px-2 py-1 text-[9px] font-bold font-mono border rounded transition-all ${
+                                                  currentInvert 
+                                                    ? 'bg-red-500/20 text-red-500 border-red-500/30' 
+                                                    : 'bg-transparent border-[var(--color-fg)]/20 opacity-60 hover:opacity-100 text-[var(--color-fg)]'
+                                                }`}
+                                              >
+                                                {currentInvert ? 'INVERTED' : 'NORMAL'}
+                                              </button>
+                                            </div>
+
+                                            {/* Reset Individual Layer Button */}
+                                            <div className="flex justify-end pt-1">
+                                              <button
+                                                onClick={() => {
+                                                  setWmsLayersList(prev => prev.map((l, i) => i === idx ? { 
+                                                    ...l, 
+                                                    opacity: 0.7, 
+                                                    hue: 0, 
+                                                    invert: false, 
+                                                    visible: true 
+                                                  } : l));
+                                                }}
+                                                className="text-[9px] opacity-50 hover:opacity-100 transition-opacity hover:underline cursor-pointer flex items-center gap-1"
+                                              >
+                                                🔄 {lang === 'id' ? 'Reset Layer Ini' : 'Reset this layer'}
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div className="text-[9.5px] italic opacity-40 text-center py-2 bg-[var(--color-fg)]/5 rounded">
+                                            {lang === 'id' ? 'Layer disembunyikan' : 'Layer is currently disabled / hidden'}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                <div className="mt-4 flex justify-between items-center border-t border-[var(--color-fg)]/10 pt-3">
+                                  <span className="text-[9.5px] opacity-50">
+                                    {lang === 'id' ? '*Perubahan disimpan secara otomatis.' : '*Changes persist automatically.'}
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      setWmsLayersList(DEFAULT_WMS_LAYERS.map(l => ({
+                                        ...l,
+                                        opacity: 0.7,
+                                        hue: 0,
+                                        invert: false,
+                                        visible: true
+                                      })));
+                                    }}
+                                    className="px-2.5 py-1 text-[10px] font-bold bg-zinc-500/10 hover:bg-zinc-500/20 text-[var(--color-fg)] border border-[var(--color-fg)]/10 rounded transition-all flex items-center gap-1"
+                                  >
+                                    🔄 {lang === 'id' ? 'Reset Semua Layer' : 'Reset All Layers'}
+                                  </button>
                                 </div>
                             </div>
                             
@@ -4983,7 +5600,54 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                     {/* Import Modal */}
                     {activeModal === 'import' && (
                         <div className="space-y-4">
-                            <p className="text-[15px] opacity-80 mb-2">Import data polygon menggunakan GeoJSON atau raw array koordinat.</p>
+                            <p className="text-[15px] opacity-80 mb-2">Import data polygon menggunakan GeoJSON, DXF, atau raw array koordinat.</p>
+                            
+                            {/* Drag-and-drop/clickable file upload zone */}
+                            <div 
+                                onDragOver={(e) => {
+                                    e.preventDefault();
+                                    e.currentTarget.classList.add('bg-[var(--color-fg)]/10');
+                                }}
+                                onDragLeave={(e) => {
+                                    e.currentTarget.classList.remove('bg-[var(--color-fg)]/10');
+                                }}
+                                onDrop={(e) => {
+                                    e.preventDefault();
+                                    e.currentTarget.classList.remove('bg-[var(--color-fg)]/10');
+                                    const file = e.dataTransfer.files[0];
+                                    if (file) {
+                                        const r = new FileReader();
+                                        r.onload = (ev) => {
+                                             setImportText(ev.target?.result as string || '');
+                                        };
+                                        r.readAsText(file);
+                                    }
+                                }}
+                                className="border-2 border-dashed border-[var(--color-fg)]/20 rounded-xl p-6 text-center hover:bg-[var(--color-fg)]/5 transition-all cursor-pointer flex flex-col items-center justify-center gap-2 group"
+                                onClick={() => {
+                                    const input = document.createElement('input');
+                                    input.type = 'file';
+                                    input.accept = '.dxf,.json,.geojson,.txt';
+                                    input.onchange = (ev: any) => {
+                                        const file = ev.target.files[0];
+                                        if (file) {
+                                            const r = new FileReader();
+                                            r.onload = (e) => {
+                                                setImportText(e.target?.result as string || '');
+                                            };
+                                            r.readAsText(file);
+                                        }
+                                    };
+                                    input.click();
+                                }}
+                            >
+                                <div className="p-3 bg-[var(--color-fg)]/5 rounded-full group-hover:scale-110 transition-transform">
+                                    <Download size={24} className="rotate-180 text-[var(--color-fg)]/60" />
+                                </div>
+                                <div className="text-[13px] font-bold">Pilih file atau seret kemari</div>
+                                <div className="text-[11px] opacity-50">Mendukung file .dxf, .json, .geojson atau .txt</div>
+                            </div>
+
                             <div className="bg-[var(--color-fg)]/5 p-4 border-l-2 border-[var(--color-fg)] font-mono text-[11px] mb-4 overflow-x-auto">
                                {`Contoh Format (Bisa didapat dari Network Tab):
 {
@@ -4995,14 +5659,14 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                             <textarea 
                                 value={importText}
                                 onChange={(e) => setImportText(e.target.value)}
-                                placeholder="Paste format JSON, GeoJSON, KML(sebagian), atau array koordinat [lng, lat]..."
+                                placeholder="Paste format JSON, GeoJSON, DXF, atau array koordinat [lng, lat]..."
                                 className="w-full h-48 p-3 text-[12px] font-mono border border-[var(--color-fg)]/20 bg-transparent rounded focus:outline-none focus:border-[var(--color-fg)]"
                             />
                             {importError && <p className="text-red-500 text-[10px] uppercase font-bold mt-1">{importError}</p>}
                             <button 
                                 onClick={handleSmartImport} 
                                 disabled={!importText.trim()} 
-                                className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-3 text-[12px] uppercase tracking-widest font-bold mt-2 disabled:opacity-50 transition-all"
+                                className="w-full bg-[var(--color-fg)] text-[var(--color-bg)] py-3 text-[12px] uppercase tracking-widest font-bold mt-2 disabled:opacity-50 transition-all font-sans"
                             >
                                 Proses Smart Import
                             </button>
@@ -5022,9 +5686,144 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
 
                     {activeModal === 'kavling' && (
                         <div className="space-y-4">
-                            <p className="text-[15px] opacity-80 mb-4">Secara otomatis subdivisi area menjadi kavling perumahan dengan akses jalan di tengah atau samping.</p>
+                            <p className="text-[14px] opacity-80 mb-3">
+                                {lang === 'id' 
+                                  ? 'Bagi area tanah Anda menjadi beberapa unit kavling siap bangun secara instan. Pilih skenario cepat di bawah atau tentukan detail konfigurasi Anda sendiri.' 
+                                  : 'Subdivide your land plot into build-ready sub-lots instantly. Choose a quick preset scenario below or define custom values.'}
+                            </p>
+
+                            {/* PRESET PILIHAN SCENARIO KHUSUS KAVLING */}
+                            <div className="bg-[var(--color-fg)]/[0.02] p-3 rounded-xl border border-[var(--color-fg)]/10 space-y-3">
+                                <span className="text-[10px] uppercase tracking-wider font-extrabold text-[var(--color-fg)] opacity-70 block">
+                                    ⚡ {lang === 'id' ? 'PILIEHAN RENCANA KAVLING OTOMATIS (SKENARIO PRESSET)' : 'AUTOMATIC PLOT PLAN SCENARIOS (PRESETS)'}
+                                </span>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {[
+                                        {
+                                            key: 'subsidi',
+                                            title: lang === 'id' ? 'Klaster Subsidi Compact' : 'Compact Affordable Cluster',
+                                            desc: lang === 'id' ? 'Optimalisasi kepadatan tinggi, tipe lot 36/72m² ekonomis untuk perumahan bersubsidi.' : 'High-density setup, type 36/72m² for budget subdivisions.',
+                                            settings: {
+                                                minArea: 72,
+                                                minFront: 6,
+                                                roadWidth: 5,
+                                                layoutType: 'single_center',
+                                                maxDepth: 18,
+                                                setbackGSB: 2,
+                                                optMode: 'maximize',
+                                                enableCulDeSac: false,
+                                                cornerChamfer: false
+                                            },
+                                            badge: lang === 'id' ? 'Ekonomis' : 'Budget',
+                                            badgeColor: 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20'
+                                        },
+                                        {
+                                            key: 'realestate',
+                                            title: lang === 'id' ? 'Klaster Seimbang (Rekomendasi)' : 'Standard Real Estate (Ideal)',
+                                            desc: lang === 'id' ? 'Tata letak hunian keluarga tipe 45/105m² atau 60/120m² dengan akses jalan lebar & aman.' : 'Spacious family residential plots with standard 105m² blocks and comfortable wide street.',
+                                            settings: {
+                                                minArea: 105,
+                                                minFront: 7,
+                                                roadWidth: 6,
+                                                layoutType: 'single_center',
+                                                maxDepth: 25,
+                                                setbackGSB: 3,
+                                                optMode: 'maximize',
+                                                enableCulDeSac: false,
+                                                cornerChamfer: true
+                                            },
+                                            badge: lang === 'id' ? 'Terpopuler' : 'Standard',
+                                            badgeColor: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                                        },
+                                        {
+                                            key: 'townhouse',
+                                            title: lang === 'id' ? 'Townhouse Premium (Jalan Kembar)' : 'Townhouse Premium (Dual-Roads)',
+                                            desc: lang === 'id' ? 'Skenario lot lebar simetris dengan jalan boulevard kembar pararel untuk hunian eksklusif.' : 'Symmetrical dual parallel-lane street access for wide luxury townhouse developments.',
+                                            settings: {
+                                                minArea: 160,
+                                                minFront: 8,
+                                                roadWidth: 7,
+                                                layoutType: 'double_parallel',
+                                                maxDepth: 30,
+                                                setbackGSB: 4,
+                                                optMode: 'even',
+                                                enableCulDeSac: false,
+                                                cornerChamfer: true
+                                            },
+                                            badge: lang === 'id' ? 'Eksklusif' : 'Luxury',
+                                            badgeColor: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20'
+                                        },
+                                        {
+                                            key: 'blocks',
+                                            title: lang === 'id' ? 'Pengelompokan Blok Lahan Waris' : 'Block Split (No Roads)',
+                                            desc: lang === 'id' ? 'Membagi bidang induk menjadi dua lajur blok besar tanpa perlu jaringan jalan internal baru.' : 'Splits parent plot into spacious private blocks without calculating internal roadway area.',
+                                            settings: {
+                                                minArea: 250,
+                                                minFront: 10,
+                                                roadWidth: 0,
+                                                layoutType: 'no_road_split_2',
+                                                maxDepth: 40,
+                                                setbackGSB: 0,
+                                                optMode: 'even',
+                                                enableCulDeSac: false,
+                                                cornerChamfer: false
+                                            },
+                                            badge: lang === 'id' ? 'Sederhana' : 'Raw Split',
+                                            badgeColor: 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/20'
+                                        }
+                                    ].map((preset) => {
+                                        // Highlight condition: see if layout type and minArea are matching
+                                        const isMatch = kavlingSettings.layoutType === preset.settings.layoutType &&
+                                                        kavlingSettings.minArea === preset.settings.minArea &&
+                                                        kavlingSettings.minFront === preset.settings.minFront;
+                                        return (
+                                            <div
+                                                key={preset.key}
+                                                onClick={() => applyKavlingPreset(preset.settings)}
+                                                className={`group relative p-3 rounded-lg border text-left cursor-pointer transition-all duration-300 flex flex-col justify-between hover:scale-[1.015] ${
+                                                    isMatch 
+                                                        ? 'border-emerald-500 bg-emerald-500/[0.04] ring-1 ring-emerald-500 dark:ring-emerald-400 shadow-md' 
+                                                        : 'border-[var(--color-fg)]/10 bg-white/40 dark:bg-black/20 hover:border-[var(--color-fg)]/30 hover:bg-white/70 dark:hover:bg-black/40'
+                                                }`}
+                                            >
+                                                <div>
+                                                    <div className="flex items-start justify-between gap-1 mb-1.5">
+                                                        <h3 className={`text-[12px] font-extrabold tracking-tight transition-colors ${isMatch ? 'text-emerald-700 dark:text-emerald-400' : 'text-[var(--color-fg)]'}`}>
+                                                            {preset.title}
+                                                        </h3>
+                                                        <span className={`text-[8.5px] px-1.5 py-0.5 rounded-full border font-bold shrink-0 uppercase tracking-wider ${preset.badgeColor}`}>
+                                                            {preset.badge}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-[10px] opacity-60 leading-relaxed mb-3">
+                                                        {preset.desc}
+                                                    </p>
+                                                </div>
+                                                
+                                                <div className="border-t border-[var(--color-fg)]/5 pt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-[9px] font-mono opacity-80 font-bold justify-between">
+                                                    <span className="opacity-75">📐 {preset.settings.minArea} m²</span>
+                                                    <span className="opacity-75">↔️ {preset.settings.minFront} m</span>
+                                                    {preset.settings.roadWidth > 0 && <span className="opacity-75">🛣️ Jalan {preset.settings.roadWidth}m</span>}
+                                                    {preset.settings.setbackGSB > 0 && <span className="opacity-75">🧱 GSB {preset.settings.setbackGSB}m</span>}
+                                                </div>
+
+                                                {/* Visual Checkmark indicator for matched layout option */}
+                                                {isMatch && (
+                                                    <div className="absolute top-1.5 right-1.5 flex items-center justify-center w-4 h-4 rounded-full bg-emerald-500 text-white text-[9px] font-black shadow-sm">
+                                                        ✓
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
                             
                             <div className="space-y-4 pt-2 border-t border-[var(--color-fg)]/10">
+                                <span className="text-[10px] uppercase tracking-wider font-extrabold text-[var(--color-fg)] opacity-50 block">
+                                    ⚙️ {lang === 'id' ? 'ATAU ATUR KONFIGURASI MANUAL DETAIL' : 'OR ADJUST MANUAL PARAMETERS'}
+                                </span>
                                 <div>
                                     <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Luas Min. Kavling (m²)</label>
                                     <input 
@@ -5053,6 +5852,35 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                                 onChange={(e) => setKavlingSettings(prev => ({...prev, roadWidth: Number(e.target.value)}))}
                                                 className="w-full p-3 text-[14px] border border-[var(--color-fg)]/20 rounded bg-transparent focus:border-[var(--color-fg)]"
                                             />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">
+                                                {lang === 'id' ? 'Warna Jalan Akses' : 'Access Road Color'}
+                                            </label>
+                                            <div className="grid grid-cols-6 gap-2">
+                                                {Object.entries(ROAD_COLOR_PALETTES).map(([key, item]) => (
+                                                    <button
+                                                        key={key}
+                                                        type="button"
+                                                        onClick={() => setKavlingSettings(prev => ({ ...prev, roadColor: key }))}
+                                                        className={`h-9 rounded-lg border transition-all flex items-center justify-center relative cursor-pointer ${
+                                                            (kavlingSettings.roadColor || 'gray') === key 
+                                                                ? 'border-[var(--color-fg)] ring-2 ring-[var(--color-fg)]/25 scale-105 shadow-sm' 
+                                                                : 'border-[var(--color-fg)]/15 hover:scale-105 hover:border-[var(--color-fg)]/30'
+                                                        }`}
+                                                        style={{ backgroundColor: item.fill }}
+                                                        title={item.name}
+                                                     >
+                                                        <span 
+                                                            className="w-3.5 h-3.5 rounded-full border border-black/10 shadow-sm" 
+                                                            style={{ backgroundColor: item.border }}
+                                                        />
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            <p className="text-[11px] opacity-50 mt-1">
+                                                {lang === 'id' ? 'Ganti warna jalan sebagai tanda visual di peta' : 'Switch road colors to distinguish them on the map'}
+                                            </p>
                                         </div>
                                         <div>
                                             <label className="text-[10px] uppercase tracking-widest font-bold opacity-60 mb-2 block">Sisi Jalan Masuk</label>
@@ -5272,27 +6100,39 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                         <span className="text-[9px] opacity-60 font-mono text-right max-w-[150px] leading-tight">Ubah angka untuk menggeser garis batas</span>
                                     </div>
                                     <div className="max-h-[300px] overflow-y-auto space-y-2 pr-2">
-                                        {kavlings.filter((k: any) => k.type !== 'road').map((k: any) => (
-                                            <div key={k.id} className={`flex items-center justify-between p-2 border rounded border-[var(--color-fg)]/20 bg-[var(--color-fg)]/5`}>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-[12px] opacity-80 font-mono w-12 truncate">{k.label || k.id}</span>
+                                        {kavlings.filter((k: any) => k.type !== 'road').map((k: any) => {
+                                            const isHovered = hoveredKavlingId === k.id;
+                                            return (
+                                                <div 
+                                                    key={k.id} 
+                                                    onMouseEnter={() => setHoveredKavlingId(k.id)}
+                                                    onMouseLeave={() => setHoveredKavlingId(null)}
+                                                    className={`flex items-center justify-between p-2 border rounded transition-all duration-200 ${
+                                                        isHovered 
+                                                            ? 'border-emerald-500 bg-emerald-500/10' 
+                                                            : 'border-[var(--color-fg)]/20 bg-[var(--color-fg)]/5'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`text-[12px] font-mono w-12 truncate ${isHovered ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'opacity-80'}`}>{k.label || k.id}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <input 
+                                                            type="number" 
+                                                            className={`w-20 p-1 text-right text-[12px] border rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)] border-transparent`}
+                                                            value={Math.round(kavlingOverrides[k.id] || k.area).toString()}
+                                                            onChange={(e) => {
+                                                                const val = parseFloat(e.target.value);
+                                                                if (!isNaN(val) && val > 0) {
+                                                                    handleAreaChange(k.id, val);
+                                                                }
+                                                            }}
+                                                        />
+                                                        <span className="text-[10px] opacity-50">m²</span>
+                                                    </div>
                                                 </div>
-                                                <div className="flex items-center gap-2">
-                                                    <input 
-                                                        type="number" 
-                                                        className={`w-20 p-1 text-right text-[12px] border rounded bg-transparent focus:outline-none focus:border-[var(--color-fg)] border-transparent`}
-                                                        value={Math.round(kavlingOverrides[k.id] || k.area).toString()}
-                                                        onChange={(e) => {
-                                                            const val = parseFloat(e.target.value);
-                                                            if (!isNaN(val) && val > 0) {
-                                                                handleAreaChange(k.id, val);
-                                                            }
-                                                        }}
-                                                    />
-                                                    <span className="text-[10px] opacity-50">m²</span>
-                                                </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                     <div className="flex gap-2 mt-4">
                                         <button onClick={() => setActiveModal('none')} className="w-1/2 border border-[var(--color-fg)] flex justify-center py-3 text-[12px] uppercase tracking-widest font-bold hover:bg-[var(--color-fg)] hover:text-[var(--color-bg)] transition-colors">
@@ -5950,44 +6790,58 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
               </div>
             ))}
             
-            {/* Input Form as "Add Next" Box - Hidden in Edit Mode */}
+            {/* Input Form as "Add Next" Box - Hidden in Edit Mode / Locked when Subdivided */}
             {!isEditMode && (
-              <form onSubmit={handleManualAdd} className="p-4 border border-[var(--color-fg)]/10 bg-[var(--color-surface)] rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.03)] hover:shadow-md transition-shadow duration-300">
-                <span className="text-[9px] uppercase tracking-wider font-extrabold opacity-40 mb-2 block">
-                  {lang === 'en' ? 'ADD COORDINATE' : 'TAMBAH KOORDINAT'}
-                </span>
-                <div className="flex gap-2">
-                  <input 
-                    type="text"
-                    inputMode="decimal"
-                    placeholder={t(lang, 'latitude')} 
-                    value={manualInput.lat}
-                    onChange={e => setManualInput({...manualInput, lat: e.target.value})}
-                    className={`flex-1 w-full border bg-[var(--color-bg)] rounded-xl px-2.5 py-1.5 text-[12px] font-mono focus:outline-none transition-colors ${
-                      manualInput.lat && (isNaN(parseFloat(manualInput.lat)) || parseFloat(manualInput.lat) < -90 || parseFloat(manualInput.lat) > 90)
-                        ? 'border-red-500 text-red-500' 
-                        : 'border-[var(--color-fg)]/10 focus:border-[var(--color-fg)]/50'
-                    }`}
-                    required
-                  />
-                  <input 
-                    type="text"
-                    inputMode="decimal"
-                    placeholder={t(lang, 'longitude')} 
-                    value={manualInput.lng}
-                    onChange={e => setManualInput({...manualInput, lng: e.target.value})}
-                    className={`flex-1 w-full border bg-[var(--color-bg)] rounded-xl px-2.5 py-1.5 text-[12px] font-mono focus:outline-none transition-colors ${
-                      manualInput.lng && (isNaN(parseFloat(manualInput.lng)) || parseFloat(manualInput.lng) < -180 || parseFloat(manualInput.lng) > 180)
-                        ? 'border-red-500 text-red-500' 
-                        : 'border-[var(--color-fg)]/10 focus:border-[var(--color-fg)]/50'
-                    }`}
-                    required
-                  />
+              isSubdivided ? (
+                <div className="p-4 border border-rose-200 dark:border-rose-900/50 bg-rose-500/5 dark:bg-rose-950/10 rounded-xl text-center space-y-2">
+                  <div className="text-[16px] animate-[pulse_2s_infinite]">🔒</div>
+                  <h4 className="text-[11px] font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider">
+                    {lang === 'id' ? 'Titik Batas Dikunci' : 'Boundary Points Locked'}
+                  </h4>
+                  <p className="text-[10px] opacity-75 text-[var(--color-fg)]/80 leading-relaxed">
+                    {lang === 'id' 
+                      ? 'Titik batas dikunci karena pembagian kavling telah dilakukan. Reset atau Hapus Kavling untuk memodifikasi titik koordinat.' 
+                      : 'Boundary points are locked because land subdivision is generated. Reset/Clear kavling to modify coordinate points.'}
+                  </p>
                 </div>
-                <button type="submit" className="w-full mt-3 bg-[var(--color-fg)] text-[var(--color-bg)] rounded-lg py-2 text-[10px] font-display font-extrabold uppercase tracking-widest flex items-center justify-center gap-1 hover:opacity-90 active:scale-[0.98] transition-all cursor-pointer">
-                  <Plus size={11} strokeWidth={3} /> {t(lang, 'addNextCoord')}
-                </button>
-              </form>
+              ) : (
+                <form onSubmit={handleManualAdd} className="p-4 border border-[var(--color-fg)]/10 bg-[var(--color-surface)] rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.03)] hover:shadow-md transition-shadow duration-300">
+                  <span className="text-[9px] uppercase tracking-wider font-extrabold opacity-40 mb-2 block">
+                    {lang === 'en' ? 'ADD COORDINATE' : 'TAMBAH KOORDINAT'}
+                  </span>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text"
+                      inputMode="decimal"
+                      placeholder={t(lang, 'latitude')} 
+                      value={manualInput.lat}
+                      onChange={e => setManualInput({...manualInput, lat: e.target.value})}
+                      className={`flex-1 w-full border bg-[var(--color-bg)] rounded-xl px-2.5 py-1.5 text-[12px] font-mono focus:outline-none transition-colors ${
+                        manualInput.lat && (isNaN(parseFloat(manualInput.lat)) || parseFloat(manualInput.lat) < -90 || parseFloat(manualInput.lat) > 90)
+                          ? 'border-red-500 text-red-500' 
+                          : 'border-[var(--color-fg)]/10 focus:border-[var(--color-fg)]/50'
+                      }`}
+                      required
+                    />
+                    <input 
+                      type="text"
+                      inputMode="decimal"
+                      placeholder={t(lang, 'longitude')} 
+                      value={manualInput.lng}
+                      onChange={e => setManualInput({...manualInput, lng: e.target.value})}
+                      className={`flex-1 w-full border bg-[var(--color-bg)] rounded-xl px-2.5 py-1.5 text-[12px] font-mono focus:outline-none transition-colors ${
+                        manualInput.lng && (isNaN(parseFloat(manualInput.lng)) || parseFloat(manualInput.lng) < -180 || parseFloat(manualInput.lng) > 180)
+                          ? 'border-red-500 text-red-500' 
+                          : 'border-[var(--color-fg)]/10 focus:border-[var(--color-fg)]/50'
+                      }`}
+                      required
+                    />
+                  </div>
+                  <button type="submit" className="w-full mt-3 bg-[var(--color-fg)] text-[var(--color-bg)] rounded-lg py-2 text-[10px] font-display font-extrabold uppercase tracking-widest flex items-center justify-center gap-1 hover:opacity-90 active:scale-[0.98] transition-all cursor-pointer">
+                    <Plus size={11} strokeWidth={3} /> {t(lang, 'addNextCoord')}
+                  </button>
+                </form>
+              )
             )}
             
             {!isEditMode && points.length === 0 && (
@@ -6414,16 +7268,21 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
 
 
 
-            <style>{`
-              .leaflet-layer.custom-wms-layer {
-                 filter: hue-rotate(${wmsHue}deg) invert(${wmsInvert ? 1 : 0}) !important;
-              }
-              ${isAddingMarker || isMeasuring || isRdtrActive ? `
-                .leaflet-container, .leaflet-container *, .leaflet-grab, .leaflet-interactive {
-                  cursor: crosshair !important;
-                }
-              ` : ''}
-            `}</style>
+             <style>{`
+               .leaflet-layer.custom-wms-layer {
+                  filter: hue-rotate(${wmsHue}deg) invert(${wmsInvert ? 1 : 0}) !important;
+               }
+               ${wmsLayersList.map((layer, idx) => `
+                 .leaflet-layer.custom-wms-layer-${idx} {
+                    filter: hue-rotate(${layer.hue !== undefined ? layer.hue : wmsHue}deg) invert(${(layer.invert !== undefined ? layer.invert : wmsInvert) ? 1 : 0}) !important;
+                 }
+               `).join('\n')}
+               ${isAddingMarker || isMeasuring || isRdtrActive ? `
+                 .leaflet-container, .leaflet-container *, .leaflet-grab, .leaflet-interactive {
+                   cursor: crosshair !important;
+                 }
+               ` : ''}
+             `}</style>
 
 
 
@@ -6516,15 +7375,15 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
 
               {/* GeoServer Dorado WMS Layers */}
               {wmsLayersList.map((layer, idx) => (
-                <LayersControl.Overlay key={idx} name={layer.name.startsWith('GeoServer') ? layer.name : `GeoServer - ${layer.name}`}>
+                <LayersControl.Overlay key={idx} name={layer.name.startsWith('GeoServer') ? layer.name : `GeoServer - ${layer.name}`} checked={layer.visible !== false}>
                   <WMSTileLayer
                     url="https://geo2.perare.io/geoserver/dorado/wms"
                     layers={layer.layers}
                     format="image/png"
                     transparent={true}
                     maxZoom={24}
-                    opacity={wmsOpacity}
-                    className="custom-wms-layer"
+                    opacity={layer.opacity !== undefined ? layer.opacity : wmsOpacity}
+                    className={`custom-wms-layer-${idx}`}
                     crossOrigin="anonymous"
                   />
                 </LayersControl.Overlay>
@@ -6677,9 +7536,13 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                 key={`proj-${proj.id}-kavling-${k.id}`}
                                 data={k.polygon} 
                                 style={() => ({
-                                    color: '#f97316',
+                                    color: k.type === 'road' 
+                                        ? (ROAD_COLOR_PALETTES[(proj.kavlingSettings?.roadColor || 'gray') as keyof typeof ROAD_COLOR_PALETTES]?.border || '#fed7aa') 
+                                        : '#f97316',
                                     weight: 1,
-                                    fillColor: k.type === 'road' ? '#fed7aa' : '#ffedd5',
+                                    fillColor: k.type === 'road' 
+                                        ? (ROAD_COLOR_PALETTES[(proj.kavlingSettings?.roadColor || 'gray') as keyof typeof ROAD_COLOR_PALETTES]?.fill || '#fed7aa') 
+                                        : '#ffedd5',
                                     fillOpacity: 0.2
                                 })}
                                 interactive={false}
@@ -6734,16 +7597,35 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
 
                     {/* Kavlings rendering */}
                     {showKavlings && kavlings.map(k => {
+                        const isHovered = hoveredKavlingId === k.id;
+                        const isTusukSate = tusukSateIds.includes(k.id);
                         return (
                             <React.Fragment key={k.id}>
                                 <GeoJSON 
+                                    key={`${k.id}-${isHovered}-${isTusukSate}`}
                                     data={k.polygon} 
                                     style={() => ({
-                                        color: k.type === 'road' ? '#94a3b8' : (k.type === 'remnant' ? '#d97706' : '#EAB308'),
-                                        weight: 2,
-                                        fillColor: k.type === 'road' ? '#e2e8f0' : (k.type === 'remnant' ? '#fef3c7' : '#FFFFFF'),
-                                        fillOpacity: 0.4
+                                        color: isHovered 
+                                            ? '#10b981' 
+                                            : isTusukSate 
+                                                ? '#e11d48' 
+                                                : (k.type === 'road' 
+                                                    ? (ROAD_COLOR_PALETTES[(kavlingSettings.roadColor || 'gray') as keyof typeof ROAD_COLOR_PALETTES]?.border || '#94a3b8') 
+                                                    : (k.type === 'remnant' ? '#d97706' : '#EAB308')),
+                                        weight: isHovered ? 4 : isTusukSate ? 3.5 : 2,
+                                        fillColor: isHovered 
+                                            ? '#34d399' 
+                                            : isTusukSate 
+                                                ? '#ffe4e6' 
+                                                : (k.type === 'road' 
+                                                    ? (ROAD_COLOR_PALETTES[(kavlingSettings.roadColor || 'gray') as keyof typeof ROAD_COLOR_PALETTES]?.fill || '#e2e8f0') 
+                                                    : (k.type === 'remnant' ? '#fef3c7' : '#FFFFFF')),
+                                        fillOpacity: isHovered ? 0.75 : isTusukSate ? 0.65 : 0.4
                                     })}
+                                    eventHandlers={{
+                                        mouseover: () => setHoveredKavlingId(k.id),
+                                        mouseout: () => setHoveredKavlingId(null)
+                                    }}
                                 />
                                 {k.setbackPolygon && (
                                     <GeoJSON 
@@ -6761,9 +7643,31 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                         {/* Center Label (e.g. A1, 110 M2) */}
                                         <Marker position={[k.center[1], k.center[0]]} opacity={0}>
                                             <Tooltip permanent direction="center" className="leaflet-tooltip-transparent text-white font-bold opacity-100 text-center">
-                                                <div style={{ fontSize: '11px', color: '#ffffff', textShadow: '1px 1px 2px rgba(0, 0, 0, 0.9), 0 0 3px rgba(0, 0, 0, 0.9)' }}>
-                                                    {k.label}<br/>
-                                                    {Math.round(k.area)} M²
+                                                <div 
+                                                    className="flex flex-col items-center justify-center rounded-lg px-2 py-1 text-center shadow-[0_4px_12px_rgba(0,0,0,0.5)] border border-slate-700/60 transition-all duration-200 hover:scale-105 pointer-events-none"
+                                                    style={{ 
+                                                        backgroundColor: 'rgba(15, 23, 42, 0.88)', 
+                                                        backdropFilter: 'blur(4px)',
+                                                        minWidth: '55px'
+                                                    }}
+                                                >
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="text-[12px] font-extrabold tracking-wide text-amber-400">
+                                                            {k.label}
+                                                        </span>
+                                                        {isTusukSate && (
+                                                            <span 
+                                                                className="text-[11px] text-rose-400 font-extrabold animate-[pulse_1.5s_infinite]" 
+                                                                title="Tusuk Sate"
+                                                            >
+                                                                🎯
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div className="w-full h-[1px] bg-slate-700/50 my-0.5" />
+                                                    <span className="text-[9px] font-mono font-medium tracking-tight text-slate-300">
+                                                        {Math.round(k.area)} m²
+                                                    </span>
                                                 </div>
                                             </Tooltip>
                                         </Marker>
@@ -6823,7 +7727,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                         <Marker 
                           key={`point-${idx}`} 
                           position={[p.lat, p.lng]} 
-                          draggable={!isFreehand}
+                          draggable={!isFreehand && !isSubdivided}
                           icon={markerIcon}
                           zIndexOffset={selectedPointIndex === idx ? 1000 : 0}
                           eventHandlers={{
@@ -6866,13 +7770,15 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                         >
                           <Tooltip direction="right" offset={[6, 0]} className="leaflet-tooltip-white-block" opacity={1} permanent={points.length < (window.innerWidth < 768 ? 10 : 20)}>
                             <div className="flex flex-col">
-                              <span>P_{String(idx + 1).padStart(2,'0')}</span>
+                              <span>P_{String(idx + 1).padStart(2,'0')}{isSubdivided && ' 🔒'}</span>
                             </div>
                           </Tooltip>
                           <Popup offset={[0, -5]} minWidth={180}>
                             <div className="flex flex-col gap-3 p-2 min-w-[160px] text-[var(--color-fg)]">
                               <div className="flex items-center justify-between border-b border-[var(--color-fg)]/10 pb-2 mb-1">
-                                <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">{t(lang, 'pointLabel')} #{idx + 1}</span>
+                                <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">
+                                  {t(lang, 'pointLabel')} #{idx + 1} {isSubdivided && '(🔒 LOCKED)'}
+                                </span>
                                 <div className="w-2 h-2 rounded-full shadow-sm" style={{ backgroundColor: p.color || DEFAULT_POINT_COLOR }} />
                               </div>
                               
@@ -6883,6 +7789,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                     type="text"
                                     inputMode="decimal"
                                     value={p.lat}
+                                    disabled={isSubdivided}
                                     onChange={(e) => {
                                       const val = parseFloat(e.target.value);
                                       if (!isNaN(val)) handlePointDrag(idx, val, p.lng);
@@ -6891,7 +7798,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                       isNaN(p.lat) || p.lat < -90 || p.lat > 90
                                         ? 'border-red-500 text-red-500'
                                         : 'border-[var(--color-fg)]/10 focus:border-[var(--color-fg)]/40'
-                                    }`}
+                                    } ${isSubdivided ? 'opacity-60 cursor-not-allowed bg-gray-50' : ''}`}
                                   />
                                 </div>
                                 <div className="flex flex-col gap-1">
@@ -6900,6 +7807,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                     type="text"
                                     inputMode="decimal"
                                     value={p.lng}
+                                    disabled={isSubdivided}
                                     onChange={(e) => {
                                       const val = parseFloat(e.target.value);
                                       if (!isNaN(val)) handlePointDrag(idx, p.lat, val);
@@ -6908,21 +7816,27 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                       isNaN(p.lng) || p.lng < -180 || p.lng > 180
                                         ? 'border-red-500 text-red-500' 
                                         : 'border-[var(--color-fg)]/10 focus:border-[var(--color-fg)]/40'
-                                    }`}
+                                    } ${isSubdivided ? 'opacity-60 cursor-not-allowed bg-gray-50' : ''}`}
                                   />
                                 </div>
                               </div>
 
                               <div className="flex gap-2 pt-1">
-                                <button 
-                                  onClick={(e) => { 
-                                    // Use a slight delay or window.confirm if needed, but here we just delete
-                                    removePointAt(idx);
-                                  }}
-                                  className="flex-1 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-2 py-1.5 text-[10px] font-bold uppercase tracking-tighter flex items-center justify-center gap-2 transition-all rounded shadow-sm"
-                                >
-                                  <Trash2 size={12} /> {t(lang, 'delete')}
-                                </button>
+                                {isSubdivided ? (
+                                  <div className="text-[10px] text-rose-500 text-center font-bold uppercase w-full bg-rose-50 dark:bg-rose-950/20 py-1.5 rounded border border-rose-100 dark:border-rose-900/40">
+                                    {lang === 'id' ? '🔒 Titik Dikunci' : '🔒 Points Locked'}
+                                  </div>
+                                ) : (
+                                  <button 
+                                    onClick={(e) => { 
+                                      // Use a slight delay or window.confirm if needed, but here we just delete
+                                      removePointAt(idx);
+                                    }}
+                                    className="flex-1 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-2 py-1.5 text-[10px] font-bold uppercase tracking-tighter flex items-center justify-center gap-2 transition-all rounded shadow-sm"
+                                  >
+                                    <Trash2 size={12} /> {t(lang, 'delete')}
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </Popup>
@@ -7332,6 +8246,120 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                         />
                         Tampilkan Overlay Kavling
                     </label>
+
+                    {/* Interactive Plot List (Hover/Highlight) in Sidebar */}
+                    <div className="mt-3 pt-3 border-t border-[var(--color-fg)]/10">
+                        <label className="text-[10px] uppercase opacity-50 tracking-wider font-bold mb-2 block flex items-center gap-1.5">
+                            📊 {lang === 'id' ? 'Daftar Plot (Sorot & Klik)' : 'Unit Plot List (Hover & Click)'}
+                        </label>
+                        <div className="max-h-[180px] overflow-y-auto space-y-1.5 pr-1.5 custom-scrollbar text-left">
+                            {kavlings.filter((k: any) => k.type !== 'road').map((k: any) => {
+                                const isHovered = hoveredKavlingId === k.id;
+                                const isTusukSate = tusukSateIds.includes(k.id);
+                                return (
+                                    <div
+                                        key={k.id}
+                                        onMouseEnter={() => setHoveredKavlingId(k.id)}
+                                        onMouseLeave={() => setHoveredKavlingId(null)}
+                                        onClick={() => {
+                                            if (editingKavlingId !== k.id && k.center) {
+                                                setMapCenter([k.center[1], k.center[0]]);
+                                            }
+                                        }}
+                                        className={`flex items-center justify-between px-2.5 py-2 text-[11px] rounded-lg border transition-all cursor-pointer font-mono group/item ${
+                                            isHovered 
+                                                ? 'border-emerald-500 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 font-extrabold shadow-sm scale-[1.02]' 
+                                                : isTusukSate
+                                                    ? 'border-rose-300 dark:border-rose-900 bg-rose-500/5 hover:bg-rose-500/10 text-rose-700 dark:text-rose-400'
+                                                    : 'border-[var(--color-fg)]/10 bg-[var(--color-fg)]/[0.02] hover:bg-[var(--color-fg)]/5 hover:border-[var(--color-fg)]/20'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-1.5 overflow-hidden flex-1 mr-2">
+                                            <span className="text-[12px] group-hover/item:animate-bounce shrink-0">
+                                                {isTusukSate ? '🎯' : '🏡'}
+                                            </span>
+                                            {editingKavlingId === k.id ? (
+                                                <div className="flex items-center gap-1 w-full" onClick={e => e.stopPropagation()}>
+                                                    <input
+                                                        type="text"
+                                                        value={editingKavlingLabel}
+                                                        onChange={(e) => setEditingKavlingLabel(e.target.value)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') {
+                                                                e.stopPropagation();
+                                                                setKavlings(prev => prev.map(item => item.id === k.id ? { ...item, label: editingKavlingLabel } : item));
+                                                                setEditingKavlingId(null);
+                                                            } else if (e.key === 'Escape') {
+                                                                e.stopPropagation();
+                                                                setEditingKavlingId(null);
+                                                            }
+                                                        }}
+                                                        className="px-1.5 py-0.5 text-[10px] font-sans border border-emerald-500 rounded bg-white dark:bg-slate-800 text-[var(--color-fg)] outline-none min-w-[70px] flex-1"
+                                                        autoFocus
+                                                    />
+                                                    <button
+                                                        onClick={() => {
+                                                            setKavlings(prev => prev.map(item => item.id === k.id ? { ...item, label: editingKavlingLabel } : item));
+                                                            setEditingKavlingId(null);
+                                                        }}
+                                                        className="p-1 text-emerald-600 dark:text-emerald-400 hover:scale-120 hover:font-bold transition-all"
+                                                        title="Simpan"
+                                                    >
+                                                        ✓
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setEditingKavlingId(null)}
+                                                        className="p-1 text-rose-500 hover:scale-120 hover:font-bold transition-all"
+                                                        title="Batal"
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center gap-1.5 overflow-hidden truncate">
+                                                    <span className="font-bold truncate">{k.label || k.id}</span>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setEditingKavlingId(k.id);
+                                                            setEditingKavlingLabel(k.label || k.id);
+                                                        }}
+                                                        title={lang === 'id' ? 'Ubah label / Ganti nama unit' : 'Edit label / rename plot'}
+                                                        className="opacity-0 group-hover/item:opacity-100 p-0.5 text-[10px] hover:scale-115 transition-all text-gray-500 hover:text-[var(--color-fg)] shrink-0"
+                                                    >
+                                                        ✏️
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {isTusukSate && editingKavlingId !== k.id && (
+                                                <span className="text-[8px] uppercase tracking-tighter px-1 py-[1px] bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400 border border-rose-200 dark:border-rose-900 rounded font-bold shrink-0 animate-[pulse_2s_infinite]">
+                                                    {lang === 'id' ? 'Tusuk Sate' : 'T-Junction'}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0 font-bold">
+                                            <span>{Math.round(kavlingOverrides[k.id] || k.area)}</span>
+                                            <span className="opacity-45 text-[9px] font-normal">m²</span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        {/* Interactive Tusuk Sate Explanation Box */}
+                        {tusukSateIds.length > 0 && (
+                            <div className="mt-3 p-3 bg-rose-500/5 dark:bg-rose-950/10 border border-rose-200 dark:border-rose-900/50 rounded-xl text-left space-y-1">
+                                <div className="flex items-center gap-1 text-rose-600 dark:text-rose-400 font-extrabold text-[9.5px] uppercase tracking-wider">
+                                    <span>🎯 {lang === 'id' ? 'ANALISIS PLOT TUSUK SATE' : 'T-JUNCTION PLOT DETECTION'}</span>
+                                </div>
+                                <p className="text-[9.5px] opacity-75 leading-relaxed text-[var(--color-fg)]/80">
+                                    {lang === 'id' 
+                                      ? 'Unit bertanda merah menghadap lurus ujung jalan utama. Memiliki visibilitas reklame komersial maksimal, namun menurut feng-shui & arsitektur memerlukan rekayasa lansekap (taman/pembatas) untuk menangkal sorot lampu kendaraan.' 
+                                      : 'Highlighted plots face direct street intersections. Provides perfect frontal display exposure, but requires screening landscape layout to block night vehicle headlights.'}
+                                </p>
+                            </div>
+                        )}
+                    </div>
                 </div>
               )}
 
@@ -7630,6 +8658,40 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                               <div className="opacity-40 uppercase text-[9px] font-bold">{lang === 'id' ? 'Analisis Kedalaman:' : 'Depth / Ratio Analysis:'}</div>
                               <div className="text-[10px] text-[var(--color-fg)]/90 leading-tight mt-0.5">{marketabilityDesc}</div>
                               <div className="text-[9px] opacity-50 mt-1 italic">{lang === 'id' ? 'Rasio Panjang : Lebar' : 'W:L ratio'}: 1 : {aspectWidthToDepthRatio.toFixed(1)}</div>
+                            </div>
+
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2">
+                              <div className="flex justify-between items-center border-b border-[var(--color-fg)]/10 pb-1.5 mb-1">
+                                <span className="font-bold text-[10px] uppercase tracking-wider flex items-center gap-1">📐 {lang === 'id' ? 'Kalkulasi Luas & Algoritma' : 'Area Calculation Method'}</span>
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-[var(--color-fg)] text-[var(--color-bg)] font-sans uppercase font-bold tracking-widest">{areaCalcMethod === 'utm' ? 'UTM ACTIVE' : 'TURF ACTIVE'}</span>
+                              </div>
+                              <div className="space-y-2 text-[10px]">
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div className={`p-2 rounded border transition-all cursor-pointer ${areaCalcMethod === 'utm' ? 'border-emerald-500/60 bg-emerald-500/5' : 'border-[var(--color-fg)]/10 bg-transparent opacity-60 hover:opacity-100'}`} onClick={() => setAreaCalcMethod('utm')}>
+                                    <div className="font-bold">UTM Cartesian:</div>
+                                    <div className="text-[11px] font-bold mt-1 text-[var(--color-fg)]">{(stats.areaSqMetersUTM || 0).toLocaleString('id-ID', {maximumFractionDigits: areaPrecision, minimumFractionDigits: areaPrecision})} m²</div>
+                                    <div className="text-[8px] opacity-65 leading-tight mt-1 border-t border-[var(--color-fg)]/5 pt-1">Model rata (flat 2D projection). Presisi tinggi lokal.</div>
+                                  </div>
+                                  <div className={`p-2 rounded border transition-all cursor-pointer ${areaCalcMethod === 'turf' ? 'border-emerald-500/60 bg-emerald-500/5' : 'border-[var(--color-fg)]/10 bg-transparent opacity-60 hover:opacity-100'}`} onClick={() => setAreaCalcMethod('turf')}>
+                                    <div className="font-bold">Turf.js Spherical:</div>
+                                    <div className="text-[11px] font-bold mt-1 text-[var(--color-fg)]">{(stats.areaSqMetersTurf || 0).toLocaleString('id-ID', {maximumFractionDigits: areaPrecision, minimumFractionDigits: areaPrecision})} m²</div>
+                                    <div className="text-[8px] opacity-65 leading-tight mt-1 border-t border-[var(--color-fg)]/5 pt-1">Model sferis bumi (WGS84). Global geodesic.</div>
+                                  </div>
+                                </div>
+
+                                {stats.areaSqMetersUTM > 0 && stats.areaSqMetersTurf > 0 && (
+                                  <div className="bg-[var(--color-fg)]/5 p-2 rounded-sm space-y-1 mt-1 font-mono text-[9px] leading-tight">
+                                    <div className="flex justify-between items-center">
+                                      <span className="opacity-60">{lang === 'id' ? 'Selisih Luas:' : 'Area Delta:'}</span>
+                                      <span className="font-bold text-amber-500">{(Math.abs(stats.areaSqMetersUTM - stats.areaSqMetersTurf)).toFixed(4)} m² ({(Math.abs(stats.areaSqMetersUTM - stats.areaSqMetersTurf) / stats.areaSqMetersUTM * 100).toFixed(6)}%)</span>
+                                    </div>
+                                    <div className="flex justify-between items-center opacity-80">
+                                      <span className="opacity-60">{lang === 'id' ? 'Keliling (UTM / Turf):' : 'Perimeter (UTM / Turf):'}</span>
+                                      <span>{(stats.perimeterUTM || 0).toFixed(2)} m / {(stats.perimeterTurf || 0).toFixed(2)} m</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
                         )}
