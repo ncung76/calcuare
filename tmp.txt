@@ -1,0 +1,16 @@
+1:import React, { useState, useEffect, useRef, useCallback, startTransition, useReducer, useMemo } from 'react';
+3:import { Map3D } from './components/Map3D';
+4:import { DXFPreview } from './components/DXFPreview';
+5:import { MeasureHandler } from './components/MeasureHandler';
+6:import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup, GeoJSON } from 'react-leaflet';
+7:import * as turf from '@turf/turf';
+8:import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X, Lock, Unlock, ChevronLeft, ChevronRight, Eye, EyeOff, Sparkles, Loader2 } from 'lucide-react';
+9:import { jsPDF } from 'jspdf';
+10:import L from 'leaflet';
+11:import proj4 from 'proj4';
+12:import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+13:import { motion, AnimatePresence } from 'motion/react';
+14:import { translations, Language, t } from './locales';
+15:import Drawing from 'dxf-writer';
+16:import * as utm from 'utm';
+9576:                  ? '💾 EKSPOR DATA:\nUnduh peta & hasil perhitungan. Mendukung laporan PDF formal yang memuat peta + diagram luas, file CAD (.dxf) untuk di-import ke AutoCAD/SketchUp, GeoJSON spasial, maupun XLS/CSV.' 

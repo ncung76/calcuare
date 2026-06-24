@@ -10,7 +10,7 @@ import { jsPDF } from 'jspdf';
 import L from 'leaflet';
 import proj4 from 'proj4';
 import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, animate } from 'motion/react';
 import { translations, Language, t } from './locales';
 import Drawing from 'dxf-writer';
 import * as utm from 'utm';
@@ -241,6 +241,81 @@ const MapWatermark = () => {
   );
 };
 
+const AnimatedKavlingGeoJSON = ({ k, index, style, eventHandlers, ...props }: any) => {
+    const geoJsonRef = useRef<any>(null);
+
+    useEffect(() => {
+        if (geoJsonRef.current) {
+            const layer = geoJsonRef.current;
+            // Get original styles from the style function
+            const originalStyle = typeof style === 'function' ? style() : style;
+            const targetOpacity = originalStyle.opacity ?? 1;
+            const targetFillOpacity = originalStyle.fillOpacity ?? 0.2;
+
+            // Start invisible
+            layer.setStyle({ opacity: 0, fillOpacity: 0 });
+
+            const controls = animate(0, 1, {
+                duration: 0.8,
+                delay: index * 0.04, // Staggered delay based on index
+                ease: 'easeOut',
+                onUpdate: (val) => {
+                    layer.setStyle({
+                        opacity: val * targetOpacity,
+                        fillOpacity: val * targetFillOpacity
+                    });
+                }
+            });
+
+            return () => controls.stop();
+        }
+    }, [index, style]);
+
+    return <GeoJSON ref={geoJsonRef} style={style} eventHandlers={eventHandlers} {...props} />;
+};
+
+const AnimatedMainPolygon = ({ positions, pathOptions, ...props }: any) => {
+    const polygonRef = useRef<any>(null);
+    const prevPositionsRef = useRef<any[]>(positions);
+
+    useEffect(() => {
+        if (polygonRef.current && positions && positions.length > 0) {
+            const layer = polygonRef.current;
+            const prev = prevPositionsRef.current;
+            const curr = positions;
+
+            if (!prev || prev.length === 0 || curr.length === 0 || prev.length !== curr.length) {
+                // If length changed drastically (add/remove point), just snap for now to avoid weird stretching
+                layer.setLatLngs(curr);
+                prevPositionsRef.current = curr;
+                return;
+            }
+
+            // Only animate if length is the same (dragging)
+            const controls = animate(0, 1, {
+                duration: 0.2,
+                ease: 'easeOut',
+                onUpdate: (val) => {
+                    const interpolated = prev.map((p, i) => {
+                        const lat = p[0] + (curr[i][0] - p[0]) * val;
+                        const lng = p[1] + (curr[i][1] - p[1]) * val;
+                        return [lat, lng];
+                    });
+                    layer.setLatLngs(interpolated);
+                },
+                onComplete: () => {
+                    layer.setLatLngs(curr);
+                }
+            });
+
+            prevPositionsRef.current = curr;
+            return () => controls.stop();
+        }
+    }, [positions]);
+
+    return <Polygon ref={polygonRef} positions={prevPositionsRef.current} pathOptions={pathOptions} {...props} />;
+};
+
 const DEFAULT_POINT_COLOR = '#1A1A1A';
 
 const FreehandHandler = ({ 
@@ -260,6 +335,12 @@ const FreehandHandler = ({
     useEffect(() => {
         if (!active) return;
         
+        // Disable map dragging and zooming to avoid accidental pans/gestures while freehand drawing
+        map.dragging.disable();
+        if (map.touchZoom) map.touchZoom.disable();
+        if (map.doubleClickZoom) map.doubleClickZoom.disable();
+        if ((map as any).tap) (map as any).tap.disable();
+
         const mapContainer = map.getContainer();
         
         const handleMouseDown = (e: MouseEvent) => {
@@ -325,6 +406,8 @@ const FreehandHandler = ({
 
         const handleTouchStart = (e: TouchEvent) => {
             if (active && e.touches.length === 1) {
+                // Prevent scrolling, pinching, or accidental double-tap zooms
+                e.preventDefault();
                 setIsDrawing(true);
                 const rect = mapContainer.getBoundingClientRect();
                 const latlng = map.containerPointToLatLng(L.point(e.touches[0].clientX - rect.left, e.touches[0].clientY - rect.top));
@@ -334,6 +417,8 @@ const FreehandHandler = ({
 
         const handleTouchMove = (e: TouchEvent) => {
             if (active && isDrawing && e.touches.length === 1) {
+                // Prevent default scrolling/panning behavior while drawing
+                e.preventDefault();
                 const rect = mapContainer.getBoundingClientRect();
                 const latlng = map.containerPointToLatLng(L.point(e.touches[0].clientX - rect.left, e.touches[0].clientY - rect.top));
                 
@@ -379,6 +464,12 @@ const FreehandHandler = ({
             window.removeEventListener('touchmove', handleTouchMove);
             window.removeEventListener('touchend', handleTouchEnd);
             mapContainer.style.cursor = '';
+
+            // Restore map dragging and zooming interactions on cleanup
+            map.dragging.enable();
+            if (map.touchZoom) map.touchZoom.enable();
+            if (map.doubleClickZoom) map.doubleClickZoom.enable();
+            if ((map as any).tap) (map as any).tap.enable();
         };
     }, [active, isDrawing, map, setIsDrawing, setPoints]);
 
@@ -392,6 +483,28 @@ const MapCameraController = ({ center }: { center: [number, number] | null }) =>
             map.flyTo(center, 18);
         }
     }, [center, map]);
+    return null;
+};
+
+const MapLockerController = ({ isLocked }: { isLocked: boolean }) => {
+    const map = useMap();
+    useEffect(() => {
+        if (isLocked) {
+            map.dragging.disable();
+            if (map.touchZoom) map.touchZoom.disable();
+            if (map.doubleClickZoom) map.doubleClickZoom.disable();
+            if (map.scrollWheelZoom) map.scrollWheelZoom.disable();
+            if (map.boxZoom) map.boxZoom.disable();
+            if (map.keyboard) map.keyboard.disable();
+        } else {
+            map.dragging.enable();
+            if (map.touchZoom) map.touchZoom.enable();
+            if (map.doubleClickZoom) map.doubleClickZoom.enable();
+            if (map.scrollWheelZoom) map.scrollWheelZoom.enable();
+            if (map.boxZoom) map.boxZoom.enable();
+            if (map.keyboard) map.keyboard.enable();
+        }
+    }, [isLocked, map]);
     return null;
 };
 
@@ -1191,6 +1304,7 @@ export default function App() {
   const [pointsState, dispatch] = useReducer(pointsReducer, { history: [[]], index: 0 });
   const points = pointsState.history[pointsState.index];
   const [is3D, setIs3D] = useState(false);
+  const [isMapLocked, setIsMapLocked] = useState(false);
   const [isPerspective, setIsPerspective] = useState(false);
   
   const setPoints = (newVal: any) => dispatch({ type: 'SET', payload: newVal });
@@ -1902,6 +2016,10 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
     invert?: boolean;
     visible?: boolean;
   }[]>([]);
+  const [activeBaseLayer, setActiveBaseLayer] = useState<string>('Google Satellite (HD)');
+  const [showLayersPanel, setShowLayersPanel] = useState<boolean>(false);
+  const [showSurveyLayers, setShowSurveyLayers] = useState<boolean>(true);
+  const [showOtherProjects, setShowOtherProjects] = useState<boolean>(true);
   const [showRdtr, setShowRdtr] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const [hoveredKavlingId, setHoveredKavlingId] = useState<string | null>(null);
@@ -1955,9 +2073,29 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
      setIsDrawing(false);
      setIsMeasuring(false);
      
+     // Reset kavling-specific states to default values
+     setKavlings([]);
+     setKavlingOverrides({});
+     setKavlingSettings({ 
+         minArea: 100, 
+         minFront: 5, 
+         roadWidth: 5, 
+         entryEdgeIndex: "-1", 
+         exitEdgeIndex: "-1", 
+         secondEntryEdgeIndex: "-1",
+         layoutType: 'single_center',
+         enableCulDeSac: false,
+         cornerChamfer: false,
+         maxDepth: 30,
+         setbackGSB: 3,
+         optMode: 'maximize',
+         roadColor: 'gray'
+     });
+
      // Persistence cleanup
      localStorage.removeItem('calcare_points_draft');
      localStorage.removeItem('calcare_current_id');
+     localStorage.removeItem('calcare_kavlings_draft');
 
      // Smooth URL cleanup
      try {
@@ -1971,7 +2109,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
      // Direct UI feedback: close modal and return to map
      setActiveModal('none');
      setMobileTab('map');
-  }, [setPoints, setCurrentProjectId, setSelectedPointIndex, setAutoSaveStatus, setSelectedSearchResult, setSelectedResultId, setNewProjectName, setMeasurePoints, setIsFreehand, setIsEditMode, setIsDrawing, setIsMeasuring, setActiveModal, setMobileTab]);
+  }, [setPoints, setCurrentProjectId, setSelectedPointIndex, setAutoSaveStatus, setSelectedSearchResult, setSelectedResultId, setNewProjectName, setMeasurePoints, setIsFreehand, setIsEditMode, setIsDrawing, setIsMeasuring, setActiveModal, setMobileTab, setKavlings, setKavlingOverrides, setKavlingSettings]);
   
   // Custom Sync State
   const [gasUrl, setGasUrl] = useState('https://script.google.com/macros/s/AKfycbxjLsv05ASo9hM6zK2juoKtcX9gUypBupmEkt6IrSHE5335_Z7kktHOcIz23BVtIFIELA/exec');
@@ -2235,7 +2373,8 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
     }
     const savedId = localStorage.getItem('calcare_current_id');
     if (savedId && savedId !== 'null') {
-      setCurrentProjectId(Number(savedId));
+      const num = Number(savedId);
+      setCurrentProjectId(isNaN(num) ? savedId : num);
     }
     
     // Load GAS URL
@@ -2262,9 +2401,26 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
     setMeasurePoints([]);
     setMarkers([]);
     setKavlings([]);
+    setKavlingOverrides({});
+    setKavlingSettings({ 
+        minArea: 100, 
+        minFront: 5, 
+        roadWidth: 5, 
+        entryEdgeIndex: "-1", 
+        exitEdgeIndex: "-1", 
+        secondEntryEdgeIndex: "-1",
+        layoutType: 'single_center',
+        enableCulDeSac: false,
+        cornerChamfer: false,
+        maxDepth: 30,
+        setbackGSB: 3,
+        optMode: 'maximize',
+        roadColor: 'gray'
+    });
     setCurrentProjectId(null);
     localStorage.removeItem('calcare_points_draft');
     localStorage.removeItem('calcare_current_id');
+    localStorage.removeItem('calcare_kavlings_draft');
     setIsEditMode(false);
     setIsFreehand(false);
     setIsMeasuring(false);
@@ -3972,7 +4128,10 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
         areaSqMeters: stats.areaSqMeters,
         perimeter: stats.perimeter,
         unit: areaUnit,
-        shared: false
+        shared: false,
+        kavlings,
+        kavlingOverrides,
+        kavlingSettings
     };
     
     // Local Save
@@ -4773,6 +4932,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
     t: any,
     lang: any
 }) => {
+    const map = useMap();
     useMapEvents({
         click(e) {
             if (!active) return;
@@ -4791,6 +4951,11 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
                     position={p} 
                     draggable={true}
                     eventHandlers={{
+                        dragstart: () => {
+                            if (map) {
+                                map.dragging.disable();
+                            }
+                        },
                         drag: (e) => {
                             const marker = e.target;
                             const pos = marker.getLatLng();
@@ -4799,6 +4964,9 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
                             setMeasurePoints(newPts as [number, number][]);
                         },
                         dragend: (e) => {
+                            if (map) {
+                                map.dragging.enable();
+                            }
                             const marker = e.target;
                             const pos = marker.getLatLng();
                             const newPts = [...measurePoints];
@@ -5083,9 +5251,9 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
       )}
       
       {activeModal !== 'none' && (
-        <div className="fixed inset-0 bg-[var(--color-bg)]/80 backdrop-blur-sm z-[3000] flex items-center justify-center p-4">
-            <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] lg:max-h-[85vh]">
-                <div className="flex justify-between items-center p-6 border-b border-[var(--color-fg)]/10 shrink-0">
+        <div className="fixed inset-0 bg-[var(--color-bg)]/80 backdrop-blur-md z-[5000] flex items-center justify-center p-3 sm:p-4">
+            <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-2xl w-full max-w-lg flex flex-col max-h-[82dvh] sm:max-h-[85vh] rounded-2xl overflow-hidden">
+                <div className="flex justify-between items-center p-5 sm:p-6 border-b border-[var(--color-fg)]/10 shrink-0">
                     <h3 className="font-display text-[18px] font-bold tracking-wider uppercase text-[var(--color-fg)]">
                         {activeModal === 'library' && 'Project Library'}
                         {activeModal === 'settings' && 'UTM Settings'}
@@ -5098,7 +5266,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                     <button onClick={() => setActiveModal('none')} className="text-[12px] uppercase tracking-widest font-bold opacity-50 hover:opacity-100">Close [X]</button>
                 </div>
                 
-                <div className="p-6 overflow-y-auto custom-scrollbar flex-1 min-h-0">
+                <div className="p-4 sm:p-6 overflow-y-auto custom-scrollbar flex-1 min-h-0">
                     {/* Menu Modal (Mobile Only) */}
                     {activeModal === 'menu' && (
                         <div className="flex flex-col gap-4 text-[12px] uppercase tracking-widest font-semibold">
@@ -6306,12 +6474,18 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
           
           <div className="flex items-center gap-3 lg:gap-4 h-full pt-1">
             <button 
-              onClick={() => handleQuickSave(true)} 
-              disabled={points.length === 0}
-              className="px-2.5 py-1.5 bg-[var(--color-fg)] text-[var(--color-bg)] rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity leading-none cursor-pointer flex items-center justify-center h-6"
-              title={lang === 'id' ? "Simpan proyek aktif ke pustaka lokal" : "Save active project to local library"}
+              onClick={() => {
+                const next3D = !is3D;
+                setIs3D(next3D);
+                if (next3D) {
+                  setMobileTab('map');
+                }
+              }} 
+              disabled={points.length === 0 && !savedProjects.some(p => p.points && p.points.length > 0)}
+              className={`px-2.5 py-1.5 rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity leading-none cursor-pointer flex items-center justify-center h-6 ${is3D ? 'bg-amber-500 text-slate-950 font-extrabold' : 'bg-[var(--color-fg)] text-[var(--color-bg)]'}`}
+              title={lang === 'id' ? "Ganti Tampilan 3D / 2D" : "Toggle 3D / 2D View"}
             >
-              SAVE
+              {is3D ? '2D' : '3D'}
             </button>
             <AnimatePresence>
               {autoSaveStatus !== 'idle' && (
@@ -7212,8 +7386,157 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
             )}
           </div>
 
+          {/* Custom Floating Layers Button */}
+          <button
+            onClick={() => setShowLayersPanel(!showLayersPanel)}
+            className={`absolute top-[10px] right-[10px] lg:left-[361px] lg:right-auto lg:top-4 z-[2000] w-[50px] lg:w-[42px] h-[34px] lg:h-[42px] rounded-xl bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md flex items-center justify-center text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5 transition-all duration-300 cursor-pointer ${showLayersPanel ? 'border-[var(--color-fg)] bg-[var(--color-fg)]/5' : ''}`}
+            title={lang === 'id' ? 'Pilih Lapisan Peta' : 'Select Map Layers'}
+          >
+            <Layers size={16} />
+          </button>
+
+          {/* Custom Floating Map Lock Button */}
+          <button
+            onClick={() => setIsMapLocked(!isMapLocked)}
+            className={`absolute top-[54px] right-[10px] lg:left-[413px] lg:right-auto lg:top-4 z-[2000] w-[50px] lg:w-[42px] h-[34px] lg:h-[42px] rounded-xl bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md flex items-center justify-center transition-all duration-300 cursor-pointer ${isMapLocked ? 'border-red-500/50 bg-red-500/10 text-red-500' : 'text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
+            title={lang === 'id' ? (isMapLocked ? 'Buka Kunci Peta' : 'Kunci Peta (Mencegah Geser)') : (isMapLocked ? 'Unlock Map' : 'Lock Map (Prevent Panning)')}
+          >
+            {isMapLocked ? <Lock size={16} /> : <Unlock size={16} />}
+          </button>
+
+          {/* Custom Floating Layers Panel */}
+          <AnimatePresence>
+            {showLayersPanel && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="absolute top-[10px] left-[10px] right-[10px] lg:left-6 lg:right-auto lg:w-[325px] lg:top-4 z-[2100] bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-xl rounded-xl p-4 flex flex-col gap-4 max-h-[80vh] overflow-y-auto custom-scrollbar"
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between pb-2 border-b border-[var(--color-fg)]/10">
+                  <div className="flex items-center gap-2">
+                    <Layers size={15} className="text-indigo-500" />
+                    <span className="text-[12px] font-bold uppercase tracking-wider text-[var(--color-fg)]">
+                      {lang === 'id' ? 'Lapisan Peta' : 'Map Layers'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setShowLayersPanel(false)}
+                    className="p-1 text-[var(--color-fg)]/60 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer flex items-center justify-center"
+                    title={lang === 'id' ? 'Tutup' : 'Close'}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                {/* Base Layers (Radios) */}
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[9px] uppercase font-extrabold tracking-widest text-[var(--color-fg)]/40 block mb-1">
+                    {lang === 'id' ? 'PETA DASAR' : 'BASE MAPS'}
+                  </span>
+                  {[
+                    { id: 'Google Satellite (HD)', label: 'Google Satellite (HD)' },
+                    { id: 'Satellite (Esri)', label: 'Satellite (Esri)' },
+                    { id: 'Street View', label: 'Street View' },
+                    { id: 'Terrain (Esri)', label: 'Terrain (Esri)' },
+                    { id: 'Monotone (Toner)', label: 'Monotone (Toner)' }
+                  ].map((layer) => (
+                    <label
+                      key={layer.id}
+                      className={`flex items-center justify-between px-3 py-2 border rounded-lg cursor-pointer text-[12px] font-medium transition-all ${
+                        activeBaseLayer === layer.id
+                          ? 'border-[var(--color-fg)] bg-[var(--color-fg)]/5 text-[var(--color-fg)]'
+                          : 'border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 text-[var(--color-fg)]/80'
+                      }`}
+                    >
+                      <span>{layer.label}</span>
+                      <input
+                        type="radio"
+                        name="activeBaseLayer"
+                        value={layer.id}
+                        checked={activeBaseLayer === layer.id}
+                        onChange={() => setActiveBaseLayer(layer.id)}
+                        className="w-3.5 h-3.5 accent-[var(--color-fg)] cursor-pointer"
+                      />
+                    </label>
+                  ))}
+                </div>
+
+                {/* Overlays (Checkboxes) */}
+                <div className="flex flex-col gap-1.5 pt-2 border-t border-[var(--color-fg)]/5">
+                  <span className="text-[9px] uppercase font-extrabold tracking-widest text-[var(--color-fg)]/40 block mb-1">
+                    {lang === 'id' ? 'LAPISAN TAMBAHAN' : 'OVERLAYS'}
+                  </span>
+
+                  {/* Dynamic GeoServer layers */}
+                  {wmsLayersList.map((layer, idx) => {
+                    const isChecked = layer.visible !== false;
+                    const displayName = layer.name.startsWith('GeoServer') ? layer.name : `GeoServer - ${layer.name}`;
+                    return (
+                      <label
+                        key={idx}
+                        className={`flex items-center justify-between px-3 py-2 border rounded-lg cursor-pointer text-[12px] font-medium transition-all ${
+                          isChecked
+                            ? 'border-indigo-500 bg-indigo-500/5 text-indigo-600 dark:text-indigo-400'
+                            : 'border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 text-[var(--color-fg)]/80'
+                        }`}
+                      >
+                        <span>{displayName}</span>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setWmsLayersList(prev => prev.map((l, i) => i === idx ? { ...l, visible: checked } : l));
+                          }}
+                          className="w-3.5 h-3.5 accent-indigo-500 cursor-pointer"
+                        />
+                      </label>
+                    );
+                  })}
+
+                  {/* Survey Layers */}
+                  <label
+                    className={`flex items-center justify-between px-3 py-2 border rounded-lg cursor-pointer text-[12px] font-medium transition-all ${
+                      showSurveyLayers
+                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400'
+                        : 'border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 text-[var(--color-fg)]/80'
+                    }`}
+                  >
+                    <span>{lang === 'id' ? 'Survey Layers (Titik, Garis, Kavling)' : 'Survey Layers'}</span>
+                    <input
+                      type="checkbox"
+                      checked={showSurveyLayers}
+                      onChange={() => setShowSurveyLayers(!showSurveyLayers)}
+                      className="w-3.5 h-3.5 accent-emerald-500 cursor-pointer"
+                    />
+                  </label>
+
+                  {/* Other Saved Projects Layer */}
+                  <label
+                    className={`flex items-center justify-between px-3 py-2 border rounded-lg cursor-pointer text-[12px] font-medium transition-all ${
+                      showOtherProjects
+                        ? 'border-amber-500 bg-amber-500/5 text-amber-600 dark:text-amber-400'
+                        : 'border-[var(--color-fg)]/10 hover:bg-[var(--color-fg)]/5 text-[var(--color-fg)]/80'
+                    }`}
+                  >
+                    <span>{lang === 'id' ? 'Tampilkan Proyek Lainnya' : 'Show Other Saved Projects'}</span>
+                    <input
+                      type="checkbox"
+                      checked={showOtherProjects}
+                      onChange={() => setShowOtherProjects(!showOtherProjects)}
+                      className="w-3.5 h-3.5 accent-amber-500 cursor-pointer"
+                    />
+                  </label>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <div ref={mapRef} className="absolute inset-0 w-full h-full overflow-hidden">
-            <MapWatermark />
+            {!is3D && <MapWatermark />}
             
             <AnimatePresence>
                 {isFreehand && (
@@ -7289,7 +7612,12 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
 
               
               {is3D ? (
-                  <Map3D points={points} kavlings={kavlings} />
+                  <Map3D 
+                    points={points} 
+                    kavlings={kavlings} 
+                    savedProjects={savedProjects}
+                    currentProjectId={currentProjectId}
+                  />
               ) : (
                 <motion.div 
                   initial={false}
@@ -7321,6 +7649,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                     center={[-8.6705, 115.2126]} 
                     zoom={12} 
                     maxZoom={24}
+                    dragging={!isMapLocked}
                     preferCanvas={true}
                     className={`w-full h-full z-10 ${(!isEditMode || isFreehand || isMeasuring || isAddingMarker || isRdtrActive) ? 'cursor-crosshair' : ''} ${isAutoDetect ? 'cursor-help' : ''}`}
                     zoomControl={false}
@@ -7328,84 +7657,81 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                 >
                   <UserLocationManager />
                   <MapCameraController center={mapCenter} />
-                  <LayersControl position="topright">
-                      <LayersControl.BaseLayer checked name="Google Satellite (HD)">
-                        <TileLayer
-                          attribution='&copy; Google'
-                          url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
-                          maxZoom={24}
-                          crossOrigin="anonymous"
-                        />
-                      </LayersControl.BaseLayer>
-              <LayersControl.BaseLayer name="Satellite (Esri)">
-                <TileLayer
-                  attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
-                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                  maxZoom={24}
-                  maxNativeZoom={19}
-                  crossOrigin="anonymous"
-                />
-              </LayersControl.BaseLayer>
-              <LayersControl.BaseLayer name="Street View">
-                <TileLayer
-                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  maxZoom={19}
-                  crossOrigin="anonymous"
-                />
-              </LayersControl.BaseLayer>
+                  <MapLockerController isLocked={isMapLocked} />
+                  {activeBaseLayer === 'Google Satellite (HD)' && (
+                    <TileLayer
+                      attribution='&copy; Google'
+                      url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
+                      maxZoom={24}
+                      crossOrigin="anonymous"
+                    />
+                  )}
+                  {activeBaseLayer === 'Satellite (Esri)' && (
+                    <TileLayer
+                      attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                      maxZoom={24}
+                      maxNativeZoom={19}
+                      crossOrigin="anonymous"
+                    />
+                  )}
+                  {activeBaseLayer === 'Street View' && (
+                    <TileLayer
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                      maxZoom={19}
+                      crossOrigin="anonymous"
+                    />
+                  )}
+                  {activeBaseLayer === 'Terrain (Esri)' && (
+                    <TileLayer
+                      attribution='Tiles &copy; Esri &mdash; Source: USGS, Esri, TANA, DeLorme, and NPS'
+                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}"
+                      maxZoom={13}
+                      crossOrigin="anonymous"
+                    />
+                  )}
+                  {activeBaseLayer === 'Monotone (Toner)' && (
+                    <TileLayer
+                      attribution='&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>, &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors'
+                      url="https://tiles.stadiamaps.com/tiles/stamen_toner/{z}/{x}/{y}{r}.png"
+                      maxZoom={20}
+                      crossOrigin="anonymous"
+                    />
+                  )}
 
-              <LayersControl.BaseLayer name="Terrain (Esri)">
-                <TileLayer
-                  attribution='Tiles &copy; Esri &mdash; Source: USGS, Esri, TANA, DeLorme, and NPS'
-                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}"
-                  maxZoom={13}
-                  crossOrigin="anonymous"
-                />
-              </LayersControl.BaseLayer>
+                  {/* GeoServer Dorado WMS Layers */}
+                  {wmsLayersList.map((layer, idx) => layer.visible !== false && (
+                    <WMSTileLayer
+                      key={idx}
+                      url="https://geo2.perare.io/geoserver/dorado/wms"
+                      layers={layer.layers}
+                      format="image/png"
+                      transparent={true}
+                      maxZoom={24}
+                      opacity={layer.opacity !== undefined ? layer.opacity : wmsOpacity}
+                      className={`custom-wms-layer-${idx}`}
+                      crossOrigin="anonymous"
+                    />
+                  ))}
 
-              <LayersControl.BaseLayer name="Monotone (Toner)">
-                <TileLayer
-                  attribution='&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>, &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors'
-                  url="https://tiles.stadiamaps.com/tiles/stamen_toner/{z}/{x}/{y}{r}.png"
-                  maxZoom={20}
-                  crossOrigin="anonymous"
-                />
-              </LayersControl.BaseLayer>
+                  {showRdtr && (
+                      <WMSTileLayer
+                        url="https://geo2.perare.io/geoserver/dorado/wms"
+                        layers="dorado:rdtr"
+                        format="image/png"
+                        transparent={true}
+                        maxZoom={24}
+                        opacity={wmsOpacity}
+                        className="custom-wms-layer"
+                        crossOrigin="anonymous"
+                      />
+                  )}
 
-              {/* GeoServer Dorado WMS Layers */}
-              {wmsLayersList.map((layer, idx) => (
-                <LayersControl.Overlay key={idx} name={layer.name.startsWith('GeoServer') ? layer.name : `GeoServer - ${layer.name}`} checked={layer.visible !== false}>
-                  <WMSTileLayer
-                    url="https://geo2.perare.io/geoserver/dorado/wms"
-                    layers={layer.layers}
-                    format="image/png"
-                    transparent={true}
-                    maxZoom={24}
-                    opacity={layer.opacity !== undefined ? layer.opacity : wmsOpacity}
-                    className={`custom-wms-layer-${idx}`}
-                    crossOrigin="anonymous"
-                  />
-                </LayersControl.Overlay>
-              ))}
-
-              {showRdtr && (
-                  <WMSTileLayer
-                    url="https://geo2.perare.io/geoserver/dorado/wms"
-                    layers="dorado:rdtr"
-                    format="image/png"
-                    transparent={true}
-                    maxZoom={24}
-                    opacity={wmsOpacity}
-                    className="custom-wms-layer"
-                    crossOrigin="anonymous"
-                  />
-              )}
-
-              <LayersControl.Overlay checked name="Survey Layers">
-                <LayerGroup>
-                  <>
-                    {/* Selected Search Result Marker */}
+                  {showSurveyLayers && (
+                    <LayerGroup>
+                      <>
+                        {/* Selected Search Result Marker */}
                     {selectedSearchResult && (
                       <Marker 
                         position={[parseFloat(selectedSearchResult.lat), parseFloat(selectedSearchResult.lon)]}
@@ -7506,7 +7832,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                     )}
 
                     {/* Other Saved Projects Polygons */}
-                    {savedProjects.filter(p => p.id !== currentProjectId && p.points && p.points.length > 2).map((proj) => (
+                    {showOtherProjects && savedProjects.filter(p => p.id !== currentProjectId && p.points && p.points.length > 2).map((proj) => (
                       <React.Fragment key={`saved-proj-group-${proj.id}`}>
                         <Polygon
                           key={`saved-proj-${proj.id}`}
@@ -7553,7 +7879,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
 
                     {/* Polygon */}
                     {points.length > 2 && (
-                      <Polygon 
+                      <AnimatedMainPolygon 
                         positions={points.map(p => [p.lat, p.lng])} 
                         pathOptions={{ 
                           color: LAND_USE_OPTIONS.find(o => o.value === landUseType)?.color || '#FFFFFF', 
@@ -7563,7 +7889,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                           lineJoin: 'miter'
                         }} 
                         eventHandlers={{ 
-                            click: (e) => {
+                            click: (e: any) => {
                                 L.DomEvent.stopPropagation(e as unknown as Event);
                                 setShowPlotSizes((prev) => !prev);
                             }
@@ -7596,13 +7922,15 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                     })}
 
                     {/* Kavlings rendering */}
-                    {showKavlings && kavlings.map(k => {
+                    {showKavlings && kavlings.map((k, index) => {
                         const isHovered = hoveredKavlingId === k.id;
                         const isTusukSate = tusukSateIds.includes(k.id);
                         return (
                             <React.Fragment key={k.id}>
-                                <GeoJSON 
+                                <AnimatedKavlingGeoJSON 
                                     key={`${k.id}-${isHovered}-${isTusukSate}`}
+                                    k={k}
+                                    index={index}
                                     data={k.polygon} 
                                     style={() => ({
                                         color: isHovered 
@@ -7628,7 +7956,9 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                     }}
                                 />
                                 {k.setbackPolygon && (
-                                    <GeoJSON 
+                                    <AnimatedKavlingGeoJSON 
+                                        k={k}
+                                        index={index}
                                         data={k.setbackPolygon} 
                                         style={() => ({
                                             color: '#ef4444', // red
@@ -7643,8 +7973,11 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                         {/* Center Label (e.g. A1, 110 M2) */}
                                         <Marker position={[k.center[1], k.center[0]]} opacity={0}>
                                             <Tooltip permanent direction="center" className="leaflet-tooltip-transparent text-white font-bold opacity-100 text-center">
-                                                <div 
-                                                    className="flex flex-col items-center justify-center rounded-lg px-2 py-1 text-center shadow-[0_4px_12px_rgba(0,0,0,0.5)] border border-slate-700/60 transition-all duration-200 hover:scale-105 pointer-events-none"
+                                                <motion.div 
+                                                    initial={{ opacity: 0, scale: 0.5 }}
+                                                    animate={{ opacity: 1, scale: 1 }}
+                                                    transition={{ delay: index * 0.04 + 0.3, duration: 0.4, type: 'spring' }}
+                                                    className="flex flex-col items-center justify-center rounded-lg px-2 py-1 text-center shadow-[0_4px_12px_rgba(0,0,0,0.5)] border border-slate-700/60 transition-colors duration-200 pointer-events-none"
                                                     style={{ 
                                                         backgroundColor: 'rgba(15, 23, 42, 0.88)', 
                                                         backdropFilter: 'blur(4px)',
@@ -7668,14 +8001,14 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                                     <span className="text-[9px] font-mono font-medium tracking-tight text-slate-300">
                                                         {Math.round(k.area)} m²
                                                     </span>
-                                                </div>
+                                                </motion.div>
                                             </Tooltip>
                                         </Marker>
                                         {/* Edge lengths */}
                                         {k.edges && k.edges.map((e: any, eId: number) => {
                                             const edgeIcon = L.divIcon({
                                                 className: 'bg-transparent text-[8px] font-mono font-semibold text-white whitespace-nowrap text-center !ml-[-50%] !mt-[-6px] opacity-100 pointer-events-none',
-                                                html: `<div style="transform: rotate(${e.angle}deg) translateY(-8px); transform-origin: center; display: inline-block; padding: 1px 4px; background: transparent; border-radius: 4px; text-shadow: 0px 0px 3px black, 0px 0px 3px black;">${e.dist.toFixed(1)}m</div>`,
+                                                html: `<div style="transform: rotate(${e.angle}deg) translateY(-8px); transform-origin: center; display: inline-block; padding: 1px 4px; background: transparent; border-radius: 4px; text-shadow: 0px 0px 3px black, 0px 0px 3px black; opacity: 0; animation: edgeFadeIn 0.5s ease-out ${index * 0.04 + 0.4}s forwards;">${e.dist.toFixed(1)}m</div>`,
                                                 iconSize: [0, 0]
                                             });
                                             return (
@@ -7738,6 +8071,9 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                               setMapCenter([p.lat, p.lng]);
                             },
                             dragstart: () => {
+                              if (mapInstanceRef.current) {
+                                mapInstanceRef.current.dragging.disable();
+                              }
                               setSelectedPointIndex(idx);
                               setIsEditMode(true);
                             },
@@ -7755,6 +8091,9 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                               }
                             },
                             dragend: (e) => {
+                              if (mapInstanceRef.current) {
+                                mapInstanceRef.current.dragging.enable();
+                              }
                               const marker = e.target;
                               const position = marker.getLatLng();
                               const snapResult = getSnappedLatLng(idx, position.lat, position.lng);
@@ -7845,8 +8184,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                     })}
                   </>
                 </LayerGroup>
-              </LayersControl.Overlay>
-            </LayersControl>
+              )}
             
             {/* Custom Annotations */}
             {markers.map((m, idx) => {

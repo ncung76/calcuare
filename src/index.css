@@ -92,3 +92,14 @@ body {
   filter: drop-shadow(0 0 1px rgba(0,0,0,0.3));
 }
 
+@keyframes edgeFadeIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.8) translateY(-8px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(-8px);
+  }
+}
+
