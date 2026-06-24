@@ -1,15 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback, startTransition, useReducer, useMemo } from 'react';
 
-import { Map3D } from './components/Map3D';
 import { DXFPreview } from './components/DXFPreview';
 import { MeasureHandler } from './components/MeasureHandler';
 import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup, GeoJSON } from 'react-leaflet';
 import * as turf from '@turf/turf';
-import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X, Lock, Unlock, ChevronLeft, ChevronRight, Eye, EyeOff, Sparkles, Loader2 } from 'lucide-react';
+import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X, Lock, Unlock, ChevronLeft, ChevronRight, Eye, EyeOff, Sparkles, Loader2, FileText } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import L from 'leaflet';
 import proj4 from 'proj4';
-import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar, CartesianGrid } from 'recharts';
 import { motion, AnimatePresence, animate } from 'motion/react';
 import { translations, Language, t } from './locales';
 import Drawing from 'dxf-writer';
@@ -244,32 +243,13 @@ const MapWatermark = () => {
 const AnimatedKavlingGeoJSON = ({ k, index, style, eventHandlers, ...props }: any) => {
     const geoJsonRef = useRef<any>(null);
 
+    // Apply style updates directly without any fade-in animation to eliminate flashing
     useEffect(() => {
         if (geoJsonRef.current) {
-            const layer = geoJsonRef.current;
-            // Get original styles from the style function
             const originalStyle = typeof style === 'function' ? style() : style;
-            const targetOpacity = originalStyle.opacity ?? 1;
-            const targetFillOpacity = originalStyle.fillOpacity ?? 0.2;
-
-            // Start invisible
-            layer.setStyle({ opacity: 0, fillOpacity: 0 });
-
-            const controls = animate(0, 1, {
-                duration: 0.8,
-                delay: index * 0.04, // Staggered delay based on index
-                ease: 'easeOut',
-                onUpdate: (val) => {
-                    layer.setStyle({
-                        opacity: val * targetOpacity,
-                        fillOpacity: val * targetFillOpacity
-                    });
-                }
-            });
-
-            return () => controls.stop();
+            geoJsonRef.current.setStyle(originalStyle);
         }
-    }, [index, style]);
+    }, [style]);
 
     return <GeoJSON ref={geoJsonRef} style={style} eventHandlers={eventHandlers} {...props} />;
 };
@@ -799,7 +779,7 @@ function calculateStats(points: {lat: number, lng: number}[], method: 'utm' | 't
   }
 }
 
-function subdividePolygon(points: any[], roadWidth: number, minArea: number, minFront: number, entryEdgeIndex: string = "-1", exitEdgeIndex: string = "-1", layoutType: string = 'single_center', enableCulDeSac: boolean = false, cornerChamfer: boolean = false, maxDepth: number = 30, setbackGSB: number = 0, optMode: string = 'maximize', secondEntryEdgeIndex: string = "-1", targetAreas: Record<string, number> = {}) {
+function subdividePolygon(points: any[], roadWidth: number, minArea: number, minFront: number, entryEdgeIndex: string = "-1", exitEdgeIndex: string = "-1", layoutType: string = 'single_center', enableCulDeSac: boolean = false, cornerChamfer: boolean = false, maxDepth: number = 30, setbackGSB: number = 0, optMode: string = 'maximize', secondEntryEdgeIndex: string = "-1", targetAreas: Record<string, number> = {}, isBuntu: boolean = false) {
   try {
     if (points.length < 3) return [];
     
@@ -1208,9 +1188,26 @@ function subdividePolygon(points: any[], roadWidth: number, minArea: number, min
         doSlice(centerY, maxY, "top");
     } else {
         // single_center
-        insertRoad(turf.bboxPolygon([minX - 1, centerY - roadWidthDeg / 2, maxX + 1, centerY + roadWidthDeg / 2]), '1');
-        doSlice(minY, centerY - roadWidthDeg/2, "bot");
-        doSlice(centerY + roadWidthDeg/2, maxY, "top");
+        if (isBuntu) {
+            const blockDepth = Math.min(maxDepth, (maxX - minX) * 0.4);
+            const roadEndX = maxX - blockDepth;
+            
+            // Insert road up to roadEndX
+            insertRoad(turf.bboxPolygon([minX - 1, centerY - roadWidthDeg / 2, roadEndX, centerY + roadWidthDeg / 2]), '1');
+            
+            // Slice Bot (Block B) from minX to roadEndX
+            doSlice(minY, centerY - roadWidthDeg/2, "bot", minX, roadEndX);
+            
+            // Slice Top (Block A) from minX to roadEndX
+            doSlice(centerY + roadWidthDeg/2, maxY, "top", minX, roadEndX);
+            
+            // Slice Merged End (Block C) from roadEndX to maxX
+            doSlice(minY, maxY, "mid", roadEndX, maxX);
+        } else {
+            insertRoad(turf.bboxPolygon([minX - 1, centerY - roadWidthDeg / 2, maxX + 1, centerY + roadWidthDeg / 2]), '1');
+            doSlice(minY, centerY - roadWidthDeg/2, "bot");
+            doSlice(centerY + roadWidthDeg/2, maxY, "top");
+        }
     }
     
     return newKavlings;
@@ -1303,7 +1300,7 @@ export default function App() {
 
   const [pointsState, dispatch] = useReducer(pointsReducer, { history: [[]], index: 0 });
   const points = pointsState.history[pointsState.index];
-  const [is3D, setIs3D] = useState(false);
+  const is3D = false;
   const [isMapLocked, setIsMapLocked] = useState(false);
   const [isPerspective, setIsPerspective] = useState(false);
   
@@ -1576,7 +1573,24 @@ export default function App() {
   const [batchSelectedIds, setBatchSelectedIds] = useState<string[]>([]);
 
   // Kavling State
-  const [kavlingSettings, setKavlingSettings] = useState({ 
+  interface KavlingSettings {
+      minArea: number;
+      minFront: number;
+      roadWidth: number;
+      entryEdgeIndex: string;
+      exitEdgeIndex: string;
+      secondEntryEdgeIndex: string;
+      layoutType: string;
+      enableCulDeSac: boolean;
+      cornerChamfer: boolean;
+      maxDepth: number;
+      setbackGSB: number;
+      optMode: string;
+      roadColor: string;
+      isBuntu?: boolean;
+  }
+
+  const [kavlingSettings, setKavlingSettings] = useState<KavlingSettings>({ 
       minArea: 100, 
       minFront: 5, 
       roadWidth: 5, 
@@ -1589,7 +1603,8 @@ export default function App() {
       maxDepth: 30,
       setbackGSB: 3,
       optMode: 'maximize',
-      roadColor: 'gray'
+      roadColor: 'gray',
+      isBuntu: false
   });
   const [kavlings, setKavlings] = useState<any[]>([]);
   const [showKavlings, setShowKavlings] = useState(true);
@@ -2315,7 +2330,8 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
             kavlingSettings.setbackGSB,
             kavlingSettings.optMode,
             kavlingSettings.secondEntryEdgeIndex,
-            kavlingOverrides
+            kavlingOverrides,
+            kavlingSettings.isBuntu || false
         );
         setKavlings(k);
       } catch (err) {
@@ -2806,7 +2822,8 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
           kavlingSettings.setbackGSB,
           kavlingSettings.optMode,
           kavlingSettings.secondEntryEdgeIndex,
-          areasToPass
+          areasToPass,
+          kavlingSettings.isBuntu || false
       );
       setKavlings(k);
       setShowKavlings(true);
@@ -2840,6 +2857,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
       optMode: string;
       enableCulDeSac: boolean;
       cornerChamfer: boolean;
+      isBuntu?: boolean;
   }) => {
       setKavlingSettings({
           minArea: preset.minArea,
@@ -2854,7 +2872,8 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
           maxDepth: preset.maxDepth,
           setbackGSB: preset.setbackGSB,
           optMode: preset.optMode,
-          roadColor: kavlingSettings.roadColor || 'gray'
+          roadColor: kavlingSettings.roadColor || 'gray',
+          isBuntu: preset.isBuntu || false
       });
 
       const k = subdividePolygon(
@@ -2871,7 +2890,8 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
           preset.setbackGSB,
           preset.optMode,
           "-1",
-          {}
+          {},
+          preset.isBuntu || false
       );
       setKavlings(k);
       setShowKavlings(true);
@@ -4195,7 +4215,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
         setKavlings([]);
     }
     if (proj.kavlingOverrides) setKavlingOverrides(proj.kavlingOverrides); else setKavlingOverrides({});
-    if (proj.kavlingSettings) setKavlingSettings(proj.kavlingSettings);
+    if (proj.kavlingSettings) setKavlingSettings(prev => ({ ...prev, ...proj.kavlingSettings }));
     setCurrentProjectId(proj.id);
     setNewProjectName(proj.name || "");
     setProjectDetails(proj.details || "");
@@ -5086,6 +5106,26 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
               >
                 {isLoadingAuth ? 'Authenticating...' : 'Sign In'}
               </button>
+
+              <div className="flex flex-col gap-2 pt-1">
+                <div className="flex items-center my-1">
+                  <div className="flex-1 border-t border-[var(--color-fg)]/10"></div>
+                  <span className="px-3 text-[10px] uppercase tracking-widest opacity-40 font-semibold">{lang === 'id' ? 'atau' : 'or'}</span>
+                  <div className="flex-1 border-t border-[var(--color-fg)]/10"></div>
+                </div>
+
+                <a 
+                  href="https://wa.me/6283840335231?text=Halo%20Calcuare%2C%20saya%20ingin%20mendaftar%20akun%20baru." 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="w-full border border-[var(--color-fg)] text-[var(--color-fg)] py-3 uppercase tracking-widest text-[12px] font-bold text-center hover:bg-[var(--color-fg)]/5 transition-all flex items-center justify-center gap-2"
+                >
+                  <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.335-1.662c1.746.953 3.71 1.458 5.705 1.459h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                  </svg>
+                  <span>{lang === 'id' ? 'Daftar Akun Baru' : 'Sign Up / Register'}</span>
+                </a>
+              </div>
             </form>
         </div>
       </div>
@@ -5307,8 +5347,8 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                         <div className="space-y-6">
                             <p className="text-[14px] leading-relaxed opacity-85 text-[var(--color-fg)]">
                                 {lang === 'id' 
-                                  ? "Gunakan tips berikut untuk memaksimalkan aplikasi Calcuare V2. Arahkan kursor atau tekan-tahan fitur untuk memunculkan panduan cepat."
-                                  : "Use these tips to get the most out of Calcuare V2. Hover over or long-tap features to reveal quick guidance tooltips."}
+                                  ? "Gunakan panduan berikut untuk memaksimalkan fitur Calcuare V2 dalam perencanaan, pengukuran, dan analisis lahan secara presisi."
+                                  : "Use the following guide to maximize Calcuare V2 features for precise land planning, measurement, and spatial analysis."}
                             </p>
 
                             <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
@@ -5319,66 +5359,80 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                     </h4>
                                     <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
                                         {lang === 'id' 
-                                            ? "Arahkan kursor ke fitur/menu selama 1-2 detik untuk memunculkan panduan. Di mobile, cukup tekan dan tahan ('long tap') pada fitur untuk melihat panduan, lalu lepas untuk menyembunyikannya."
-                                            : "Simply hover your cursor over features or menus for 1-2 seconds to reveal a guide. On mobile, long-tap any feature to view the guide, and release to hide it."}
+                                            ? "Arahkan kursor Anda ke ikon atau fitur apa pun selama beberapa detik untuk menampilkan penjelasan interaktif instan. Pada perangkat seluler, tekan dan tahan (long-tap) fitur untuk melihat panduan cepat."
+                                            : "Hover your cursor over any icon or feature for a few seconds to display an instant interactive explanation. On mobile devices, long-tap a feature to view quick guidance."}
                                     </p>
                                 </div>
+
                                 {/* Step 1: Input & Draw */}
                                 <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
-                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-fuchsia-600">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
                                         <MapPin size={16} /> 1. {lang === 'id' ? "Gambar & Input Poligon Lahan" : "Draw & Input Land Polygon"}
                                     </h4>
                                     <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
                                         {lang === 'id' 
-                                            ? "Klik langsung pada peta untuk membuat titik batas lahan, atau masukkan koordinat Latitude/Longitude secara presisi di bilah samping kiri. Anda juga dapat menggunakan tombol 'Gambar Bebas' untuk menggambar area batas kursor Anda."
-                                            : "Click directly on the map to create land boundary points, or enter precise Latitude/Longitude coordinates in the left sidebar. You can also use the 'Freehand Draw' button to outline boundaries using your cursor."}
+                                            ? "Klik langsung pada peta untuk memplot titik batas lahan, atau masukkan koordinat Latitude/Longitude secara presisi di panel sebelah kiri. Anda juga dapat mengaktifkan fitur 'Gambar Bebas' (Freehand Draw) untuk mendelineasi batas dengan menyeret kursor."
+                                            : "Click directly on the map to plot land boundary points, or input precise Latitude/Longitude coordinates in the left panel. You can also toggle 'Freehand Draw' to delineate boundaries by dragging your cursor."}
                                     </p>
                                 </div>
 
                                 {/* Step 2: Measuring & Metrics */}
                                 <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
-                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-blue-600">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-blue-600 dark:text-blue-400">
                                         <BarChart2 size={16} /> 2. {lang === 'id' ? "Metrik & Pengukuran Akurat" : "Accurate Metrics & Measurement"}
                                     </h4>
                                     <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
                                         {lang === 'id' 
-                                            ? "Akurasi perhitungan mencapai 99% menggunakan perhitungan geometri sferis (ellipsoid WGS84). Lihat data Luas (m², Are, Hektar), Keliling, serta estimasi dimensi panjang dan lebar secara instan di panel bagian kanan atas."
-                                            : "Calculation accuracy reaches 99% using spherical geometry (WGS84 ellipsoid). View instant Area (m², Are, Hectares), Perimeter, and estimated length and width dimensions in the top-right panel."}
+                                            ? "Sistem menghitung luas area menggunakan algoritma sferis sferoid WGS84 (akurasi tinggi). Lihat data Luas (m², Are, Hektar), panjang keliling, estimasi dimensi panjang/lebar, serta detail sudut batas pada panel kanan atas secara instan."
+                                            : "The system calculates area using high-precision WGS84 spheroid spherical algorithms. View real-time Area (m², Are, Hectares), perimeter, estimated dimensions, and boundary angle details in the top-right panel."}
                                     </p>
                                 </div>
 
                                 {/* Step 3: Auto Kavling */}
                                 <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
-                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-orange-600">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-orange-600 dark:text-orange-400">
                                         <Layout size={16} /> 3. {lang === 'id' ? "Autolayout Subdivisi Kavling" : "Auto Subdivision Kavling Layout"}
                                     </h4>
                                     <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
                                         {lang === 'id' 
-                                            ? "Bagi area lahan Anda menjadi beberapa kavling perumahan secara otomatis. Masuk ke tab 'Auto Kavling', atur batas luas per kavling, lebar jalan akses (di tengah atau samping) lalu klik 'Auto Kavling'. Anda dapat merubah detail per kavling dengan mudah."
-                                            : "Divide your land area into multiple housing plots automatically. Open the 'Auto Kavling' tab, set the minimum plot area, access road width (center or side layout), and click 'Auto Kavling' to see instantaneous layouts."}
+                                            ? "Bagi area lahan Anda menjadi beberapa kavling perumahan secara otomatis. Buka tab 'Auto Kavling', tentukan target luas per unit kavling, lebar jalan akses (jalan tengah atau samping), arah pembagian, lalu klik 'Auto Kavling' untuk simulasi tata letak instan."
+                                            : "Divide your land area into multiple housing plots automatically. Open the 'Auto Kavling' tab, define the target area per plot unit, access road width (center or side road), division direction, and click 'Auto Kavling' for instantaneous layouts."}
                                     </p>
                                 </div>
 
                                 {/* Step 4: RDTR Spatial Check */}
                                 <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
-                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-green-600">
-                                        <Info size={16} /> 4. {lang === 'id' ? "Analisis Tata Ruang RDTR Bali" : "RDTR Bali Spatial Planning Analysis"}
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
+                                        <Info size={16} /> 4. {lang === 'id' ? "Zonasi Tata Ruang RDTR Bali" : "RDTR Bali Spatial Planning Zoning"}
                                     </h4>
                                     <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
                                         {lang === 'id' 
-                                            ? "Analisis Tata Ruang bekerja di latar belakang saat Anda menentukan titik. Untuk melihat rincian lengkap, klik tab RDTR. Aplikasi akan menarik data zonasi resmi, deskripsi peruntukan, KDB, KLB, KDH, dan status perizinan lahan tersebut secara otomatis."
-                                            : "Spatial Analysis works in the background as you plot points. To see full details, switch to the RDTR tab. The app automatically retrieves official zoning data, usage descriptions, build covenants (KDB, KLB, KDH), and compliance status."}
+                                            ? "Analisis spasial berjalan otomatis saat Anda menggambar lahan. Klik tab 'RDTR' untuk meninjau kecocokan zonasi resmi Provinsi Bali, deskripsi peruntukan, koefisien bangunan (KDB, KLB, KDH), serta syarat kepatuhan hukum tata ruang."
+                                            : "Spatial analysis runs automatically as you draw. Switch to the 'RDTR' tab to review official Bali Province zoning overlays, usage descriptions, building covenants (KDB, KLB, KDH), and legal spatial compliance guidelines."}
                                     </p>
                                 </div>
-                                {/* Step 5: Exporting & DXF */}
+
+                                {/* Step 5: Cut & Fill */}
                                 <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
-                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-rose-600">
-                                        <Download size={16} /> 5. {lang === 'id' ? "Ekspor Laporan & Format CAD (DXF)" : "Export Report & CAD Formats (DXF)"}
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                                        <Layers size={16} /> 5. {lang === 'id' ? "Analisis Galian & Timbunan (Cut & Fill)" : "Cut & Fill Volume Analysis"}
                                     </h4>
                                     <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
                                         {lang === 'id' 
-                                            ? "Hasilkan laporan analisis PDF profesional yang lengkap dengan header zonasi berwarna, tangkapan layar peta, metrik regulasi terstruktur, dan rincian kavling. Anda juga dapat mengunduh file DXF CAD bawaan atau koordinat mentah GeoJSON/CSV."
-                                            : "Generate professional PDF analysis reports complete with colored zoning headers, map snapshots, structured regulation metrics, and kavling sub-plots. You can also download native DXF CAD files, GeoJSON, or CSV files."}
+                                            ? "Gunakan kalkulator topografi di tab 'Cut & Fill' untuk mengestimasi volume tanah yang perlu digali atau ditimbun demi meratakan lahan. Atur elevasi target (flat grade) dan parameter kemiringan lereng untuk kalkulasi volume m³ dan estimasi biaya alat berat."
+                                            : "Use the topographic calculator in the 'Cut & Fill' tab to estimate soil volumes needed for land grading. Set the target elevation (flat grade) and slope slope parameters to compute m³ volume and heavy machinery cost estimates."}
+                                    </p>
+                                </div>
+
+                                {/* Step 6: Exporting & DXF */}
+                                <div className="border border-[var(--color-fg)]/10 rounded-xl p-4 bg-[var(--color-fg)]/5 space-y-2">
+                                    <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-rose-600 dark:text-rose-400">
+                                        <FileText size={16} /> 6. {lang === 'id' ? "Ekspor Laporan PDF & CAD (DXF)" : "Export Report PDF & CAD (DXF)"}
+                                    </h4>
+                                    <p className="text-[11.5px] leading-relaxed opacity-80 text-[var(--color-fg)]">
+                                        {lang === 'id' 
+                                            ? "Hasilkan berkas laporan PDF resmi berisi ringkasan zonasi warna, tangkapan layar peta, analisis kavling, dan perhitungan cut-and-fill. Ekspor juga data vektor dalam bentuk DXF CAD untuk diolah lebih lanjut di AutoCAD, atau format spasial GeoJSON/CSV."
+                                            : "Generate an official PDF report document compiling colored zoning keys, map imagery snapshots, sub-plot metrics, and grading volumes. You can also export vector data as DXF CAD for AutoCAD drafting, or spatial GeoJSON/CSV tables."}
                                     </p>
                                 </div>
                             </div>
@@ -6176,6 +6230,27 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                         <option value="no_road_split_2">Tanpa Jalan (Bagi 2)</option>
                                     </select>
                                 </div>
+                                {kavlingSettings.layoutType === 'single_center' && (
+                                    <div className="mt-3">
+                                        <label className="flex items-start gap-2.5 cursor-pointer text-[12px] font-semibold text-[var(--color-fg)] bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 select-none hover:bg-[var(--color-fg)]/10 transition">
+                                            <input 
+                                                type="checkbox"
+                                                id="chk-buntu"
+                                                checked={kavlingSettings.isBuntu || false}
+                                                onChange={(e) => setKavlingSettings(prev => ({...prev, isBuntu: e.target.checked}))}
+                                                className="accent-[var(--color-fg)] w-4 h-4 mt-0.5"
+                                            />
+                                            <div>
+                                                <span className="font-bold">🚧 {lang === 'id' ? 'BUNTU' : 'DEAD END'}</span>
+                                                <span className="block text-[10px] font-normal opacity-60 mt-0.5">
+                                                    {lang === 'id' 
+                                                      ? 'Tutup sisi jalan keluar, lalu gabungkan sisa blok A & B menjadi Blok C' 
+                                                      : 'Close exit road and merge last parts of blocks A & B into Block C'}
+                                                </span>
+                                            </div>
+                                        </label>
+                                    </div>
+                                )}
                             </div>
                             
                             {/* ADVANCED SETTINGS */}
@@ -6473,32 +6548,39 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
           </div>
           
           <div className="flex items-center gap-3 lg:gap-4 h-full pt-1">
-            <button 
-              onClick={() => {
-                const next3D = !is3D;
-                setIs3D(next3D);
-                if (next3D) {
-                  setMobileTab('map');
-                }
-              }} 
-              disabled={points.length === 0 && !savedProjects.some(p => p.points && p.points.length > 0)}
-              className={`px-2.5 py-1.5 rounded text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 hover:opacity-80 transition-opacity leading-none cursor-pointer flex items-center justify-center h-6 ${is3D ? 'bg-amber-500 text-slate-950 font-extrabold' : 'bg-[var(--color-fg)] text-[var(--color-bg)]'}`}
-              title={lang === 'id' ? "Ganti Tampilan 3D / 2D" : "Toggle 3D / 2D View"}
-            >
-              {is3D ? '2D' : '3D'}
-            </button>
             <AnimatePresence>
               {autoSaveStatus !== 'idle' && (
                 <motion.div
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -10 }}
-                  className="flex items-center gap-1.5 h-6"
+                  initial={{ opacity: 0, scale: 0.85, y: -4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.85, y: -4 }}
+                  transition={{ type: "spring", stiffness: 450, damping: 25 }}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase shadow-sm border leading-none transition-all duration-300 ${
+                    autoSaveStatus === 'saving' 
+                      ? 'bg-amber-500/10 dark:bg-amber-500/20 border-amber-500/20 text-amber-600 dark:text-amber-400' 
+                      : 'bg-emerald-500/10 dark:bg-emerald-500/20 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                  }`}
                 >
-                  <div className={`w-1.5 h-1.5 rounded-full ${autoSaveStatus === 'saving' ? 'bg-orange-500 animate-pulse' : 'bg-green-500'}`} />
-                  <span className="text-[9px] uppercase tracking-widest font-bold opacity-40 leading-none">
-                    {autoSaveStatus === 'saving' ? 'SAVING...' : 'SAVED'}
-                  </span>
+                  {autoSaveStatus === 'saving' ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin" strokeWidth={3} />
+                      <span>{lang === 'id' ? 'MENYIMPAN...' : 'SAVING DRAFT...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <motion.div
+                        initial={{ scale: 0.4, rotate: -30 }}
+                        animate={{ scale: 1, rotate: 0 }}
+                        transition={{ type: "spring", stiffness: 500, damping: 15 }}
+                      >
+                        <Check className="w-3 h-3 text-emerald-500 dark:text-emerald-400" strokeWidth={3} />
+                      </motion.div>
+                      <span className="flex items-center gap-1">
+                        {lang === 'id' ? 'DRAF TERSIMPAN' : 'DRAFT SAVED'}
+                        <Sparkles className="w-2.5 h-2.5 text-emerald-500 animate-pulse" />
+                      </span>
+                    </>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -7297,112 +7379,118 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
           <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#1A1A1A 1px, transparent 1px)', backgroundSize: '20px 20px', zIndex: 0 }}></div>
           
           {/* Floating Search Container */}
-          <div className="absolute top-[10px] left-[10px] right-[70px] md:right-[80px] lg:left-6 lg:right-auto lg:w-[325px] lg:top-4 z-[2000] flex flex-col gap-1">
-            <form onSubmit={handleSearch} className="bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md rounded-xl flex items-center h-[34px] lg:h-[42px] px-3 lg:px-4 group focus-within:border-[var(--color-fg)]/40 focus-within:shadow-lg transition-all duration-300">
-              {isSearching ? (
-                <div className="w-3.5 h-3.5 border-2 border-[var(--color-fg)]/20 border-t-[var(--color-fg)] rounded-full animate-spin mr-3"></div>
-              ) : (
-                <Search size={14} className="opacity-40 mr-3 group-focus-within:opacity-100 transition-opacity" />
-              )}
-              <input 
-                 type="text" 
-                 placeholder={t(lang, 'searchPlaceholder')} 
-                 className="bg-transparent text-[12.5px] outline-none flex-1 font-sans text-[var(--color-fg)] placeholder:opacity-40 h-full"
-                 value={searchQuery}
-                 onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </form>
-            <AnimatePresence>
-               {isSearching && searchQuery.length > 2 && searchResults.length === 0 && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: -10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    className="bg-[var(--color-bg)]/80 backdrop-blur-sm px-4 py-2 text-[10px] uppercase tracking-widest font-bold border-x border-b border-[var(--color-fg)]/10"
+          <div className="absolute top-[10px] left-[10px] right-[100px] lg:left-6 lg:right-auto lg:w-[325px] lg:top-4 z-[2000] flex flex-col gap-1 pointer-events-none">
+            {/* Search Box - holds input & suggestions */}
+            <div className="w-full pointer-events-auto flex flex-col gap-1">
+              <form onSubmit={handleSearch} className="bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md rounded-xl flex items-center h-[34px] lg:h-[42px] px-3 lg:px-4 group focus-within:border-[var(--color-fg)]/40 focus-within:shadow-lg transition-all duration-300">
+                {isSearching ? (
+                  <div className="w-3.5 h-3.5 border-2 border-[var(--color-fg)]/20 border-t-[var(--color-fg)] rounded-full animate-spin mr-3"></div>
+                ) : (
+                  <Search size={14} className="opacity-40 mr-3 group-focus-within:opacity-100 transition-opacity" />
+                )}
+                <input 
+                   type="text" 
+                   placeholder={t(lang, 'searchPlaceholder')} 
+                   className="bg-transparent text-[12.5px] outline-none flex-1 font-sans text-[var(--color-fg)] placeholder:opacity-40 h-full"
+                   value={searchQuery}
+                   onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </form>
+              <AnimatePresence>
+                 {isSearching && searchQuery.length > 2 && searchResults.length === 0 && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="bg-[var(--color-bg)]/80 backdrop-blur-sm px-4 py-2 text-[10px] uppercase tracking-widest font-bold border-x border-b border-[var(--color-fg)]/10"
+                    >
+                       {t(lang, 'searching')}...
+                    </motion.div>
+                 )}
+              </AnimatePresence>
+              <AnimatePresence>
+                {isFreehand && (
+                  <motion.div
+                    key="done-drawing-container"
+                    initial={{ opacity: 0, y: 20, x: '-50%' }}
+                    animate={{ opacity: 1, y: 0, x: '-50%' }}
+                    exit={{ opacity: 0, y: 20, x: '-50%' }}
+                    className="fixed bottom-24 lg:bottom-10 left-1/2 z-[3000] w-auto pointer-events-auto"
                   >
-                     {t(lang, 'searching')}...
+                    <button
+                      onClick={() => setIsFreehand(false)}
+                      className="bg-[var(--color-fg)] text-[var(--color-bg)] shadow-[0_10px_30px_rgba(0,0,0,0.3)] flex items-center justify-center gap-3 px-8 py-5 group hover:scale-[1.05] active:scale-95 transition-all rounded-full"
+                    >
+                      <motion.div
+                        animate={{ scale: [1, 1.2, 1] }}
+                        transition={{ duration: 1.5, repeat: Infinity }}
+                        className="bg-green-500 w-2.5 h-2.5 rounded-full"
+                      />
+                      <Check size={18} className="text-[var(--color-bg)]" />
+                      <span className="text-[14px] font-bold uppercase tracking-[0.2em]">{t(lang, 'doneDrawing')}</span>
+                    </button>
                   </motion.div>
-               )}
-            </AnimatePresence>
-            <AnimatePresence>
-              {isFreehand && (
-                <motion.div
-                  key="done-drawing-container"
-                  initial={{ opacity: 0, y: 20, x: '-50%' }}
-                  animate={{ opacity: 1, y: 0, x: '-50%' }}
-                  exit={{ opacity: 0, y: 20, x: '-50%' }}
-                  className="fixed bottom-24 lg:bottom-10 left-1/2 z-[3000] w-auto pointer-events-auto"
-                >
-                  <button
-                    onClick={() => setIsFreehand(false)}
-                    className="bg-[var(--color-fg)] text-[var(--color-bg)] shadow-[0_10px_30px_rgba(0,0,0,0.3)] flex items-center justify-center gap-3 px-8 py-5 group hover:scale-[1.05] active:scale-95 transition-all rounded-full"
-                  >
-                    <motion.div
-                      animate={{ scale: [1, 1.2, 1] }}
-                      transition={{ duration: 1.5, repeat: Infinity }}
-                      className="bg-green-500 w-2.5 h-2.5 rounded-full"
-                    />
-                    <Check size={18} className="text-[var(--color-bg)]" />
-                    <span className="text-[14px] font-bold uppercase tracking-[0.2em]">{t(lang, 'doneDrawing')}</span>
-                  </button>
-                </motion.div>
+                )}
+              </AnimatePresence>
+              {searchResults.length > 0 && (
+                 <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-lg rounded-xl max-h-64 overflow-y-auto custom-scrollbar flex flex-col divide-y divide-[var(--color-fg)]/5 mt-1 overflow-hidden">
+                    {searchResults.map(res => (
+                       <button 
+                          key={res.place_id} 
+                          type="button"
+                          className={`text-left px-5 py-3 transition-colors text-[12px] ${selectedResultId === res.place_id ? 'bg-[var(--color-fg)] text-[var(--color-bg)]' : 'hover:bg-[var(--color-fg)]/5 text-[var(--color-fg)]/90'}`}
+                          onClick={() => {
+                             setMapCenter([parseFloat(res.lat), parseFloat(res.lon)]);
+                             setSelectedResultId(res.place_id);
+                             setSelectedSearchResult(res);
+                             setSearchResults([]); // Sembunyikan hasil setelah memilih
+                          }}
+                       >
+                         <div className="flex flex-col">
+                            <span className={`font-bold text-[12px] block truncate ${selectedResultId === res.place_id ? 'text-white' : 'text-[var(--color-fg)]'}`}>
+                               {res.address?.name || res.display_name.split(',')[0]}
+                            </span>
+                            <div className="flex flex-wrap gap-x-2 gap-y-1 mt-1.5">
+                               {/* Terjemahan label manual karena locales.ts belum mendukung dynamic address keys */}
+                               {res.address && (
+                                  <>
+                                     {res.address.village && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/10 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/40 text-white bg-white/10' : 'bg-[var(--color-fg)]/5 text-[var(--color-fg)]'}`}>Desa: {res.address.village}</span>}
+                                     {res.address.suburb && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/10 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/40 text-white bg-white/10' : 'bg-[var(--color-fg)]/5 text-[var(--color-fg)]'}`}>Kec: {res.address.suburb}</span>}
+                                     {res.address.city && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/10 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/40 text-white bg-white/10' : 'bg-[var(--color-fg)]/5 text-[var(--color-fg)]'}`}>Kota: {res.address.city}</span>}
+                                     {res.address.state && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/10 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/40 text-white bg-white/10' : 'bg-[var(--color-fg)]/5 text-[var(--color-fg)]'}`}>{res.address.state}</span>}
+                                     {res.address.country && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/20 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/60 text-white bg-white/20' : 'bg-[var(--color-fg)]/10 text-[var(--color-fg)]'}`}>{res.address.country}</span>}
+                                  </>
+                               )}
+                               {!res.address && <span className={`text-[10px] font-mono block truncate ${selectedResultId === res.place_id ? 'opacity-80' : 'opacity-60'}`}>{res.display_name}</span>}
+                            </div>
+                         </div>
+                       </button>
+                    ))}
+                 </div>
               )}
-            </AnimatePresence>
-            {searchResults.length > 0 && (
-               <div className="bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-lg rounded-xl max-h-64 overflow-y-auto custom-scrollbar flex flex-col divide-y divide-[var(--color-fg)]/5 mt-1 overflow-hidden">
-                  {searchResults.map(res => (
-                     <button 
-                        key={res.place_id} 
-                        type="button"
-                        className={`text-left px-5 py-3 transition-colors text-[12px] ${selectedResultId === res.place_id ? 'bg-[var(--color-fg)] text-[var(--color-bg)]' : 'hover:bg-[var(--color-fg)]/5 text-[var(--color-fg)]/90'}`}
-                        onClick={() => {
-                           setMapCenter([parseFloat(res.lat), parseFloat(res.lon)]);
-                           setSelectedResultId(res.place_id);
-                           setSelectedSearchResult(res);
-                           setSearchResults([]); // Sembunyikan hasil setelah memilih
-                        }}
-                     >
-                       <div className="flex flex-col">
-                          <span className={`font-bold text-[12px] block truncate ${selectedResultId === res.place_id ? 'text-white' : 'text-[var(--color-fg)]'}`}>
-                             {res.address?.name || res.display_name.split(',')[0]}
-                          </span>
-                          <div className="flex flex-wrap gap-x-2 gap-y-1 mt-1.5">
-                             {/* Terjemahan label manual karena locales.ts belum mendukung dynamic address keys */}
-                             {res.address && (
-                                <>
-                                   {res.address.village && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/10 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/40 text-white bg-white/10' : 'bg-[var(--color-fg)]/5 text-[var(--color-fg)]'}`}>Desa: {res.address.village}</span>}
-                                   {res.address.suburb && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/10 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/40 text-white bg-white/10' : 'bg-[var(--color-fg)]/5 text-[var(--color-fg)]'}`}>Kec: {res.address.suburb}</span>}
-                                   {res.address.city && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/10 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/40 text-white bg-white/10' : 'bg-[var(--color-fg)]/5 text-[var(--color-fg)]'}`}>Kota: {res.address.city}</span>}
-                                   {res.address.state && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/10 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/40 text-white bg-white/10' : 'bg-[var(--color-fg)]/5 text-[var(--color-fg)]'}`}>{res.address.state}</span>}
-                                   {res.address.country && <span className={`text-[9px] uppercase tracking-tighter px-1.5 py-0.5 border border-[var(--color-fg)]/20 rounded font-bold ${selectedResultId === res.place_id ? 'border-white/60 text-white bg-white/20' : 'bg-[var(--color-fg)]/10 text-[var(--color-fg)]'}`}>{res.address.country}</span>}
-                                </>
-                             )}
-                             {!res.address && <span className={`text-[10px] font-mono block truncate ${selectedResultId === res.place_id ? 'opacity-80' : 'opacity-60'}`}>{res.display_name}</span>}
-                          </div>
-                       </div>
-                     </button>
-                  ))}
-               </div>
-            )}
+            </div>
           </div>
 
-          {/* Custom Floating Layers Button */}
-          <button
-            onClick={() => setShowLayersPanel(!showLayersPanel)}
-            className={`absolute top-[10px] right-[10px] lg:left-[361px] lg:right-auto lg:top-4 z-[2000] w-[50px] lg:w-[42px] h-[34px] lg:h-[42px] rounded-xl bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md flex items-center justify-center text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5 transition-all duration-300 cursor-pointer ${showLayersPanel ? 'border-[var(--color-fg)] bg-[var(--color-fg)]/5' : ''}`}
-            title={lang === 'id' ? 'Pilih Lapisan Peta' : 'Select Map Layers'}
-          >
-            <Layers size={16} />
-          </button>
+          {/* Floating Right Controls Container */}
+          <div className="absolute top-[10px] right-[10px] lg:right-6 lg:top-4 z-[2000] flex items-center gap-1.5 lg:gap-2.5">
+            {/* Custom Floating Layers Button */}
+            <button
+              onClick={() => setShowLayersPanel(!showLayersPanel)}
+              className={`w-[34px] lg:w-[42px] h-[34px] lg:h-[42px] rounded-xl bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md flex items-center justify-center text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5 transition-all duration-300 cursor-pointer ${showLayersPanel ? 'border-[var(--color-fg)] bg-[var(--color-fg)]/5' : ''}`}
+              title={lang === 'id' ? 'Pilih Lapisan Peta' : 'Select Map Layers'}
+            >
+              <Layers size={16} />
+            </button>
 
-          {/* Custom Floating Map Lock Button */}
-          <button
-            onClick={() => setIsMapLocked(!isMapLocked)}
-            className={`absolute top-[54px] right-[10px] lg:left-[413px] lg:right-auto lg:top-4 z-[2000] w-[50px] lg:w-[42px] h-[34px] lg:h-[42px] rounded-xl bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md flex items-center justify-center transition-all duration-300 cursor-pointer ${isMapLocked ? 'border-red-500/50 bg-red-500/10 text-red-500' : 'text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
-            title={lang === 'id' ? (isMapLocked ? 'Buka Kunci Peta' : 'Kunci Peta (Mencegah Geser)') : (isMapLocked ? 'Unlock Map' : 'Lock Map (Prevent Panning)')}
-          >
-            {isMapLocked ? <Lock size={16} /> : <Unlock size={16} />}
-          </button>
+            {/* Custom Floating Map Lock Button */}
+            <button
+              onClick={() => setIsMapLocked(!isMapLocked)}
+              className={`w-[34px] lg:w-[42px] h-[34px] lg:h-[42px] rounded-xl bg-[var(--color-surface)] border border-[var(--color-fg)]/10 shadow-md flex items-center justify-center transition-all duration-300 cursor-pointer ${isMapLocked ? 'border-red-500/50 bg-red-500/10 text-red-500' : 'text-[var(--color-fg)] hover:bg-[var(--color-fg)]/5'}`}
+              title={lang === 'id' ? (isMapLocked ? 'Buka Kunci Peta' : 'Kunci Peta (Mencegah Geser)') : (isMapLocked ? 'Unlock Map' : 'Lock Map (Prevent Panning)')}
+            >
+              {isMapLocked ? <Lock size={16} /> : <Unlock size={16} />}
+            </button>
+          </div>
 
           {/* Custom Floating Layers Panel */}
           <AnimatePresence>
@@ -7412,7 +7500,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="absolute top-[10px] left-[10px] right-[10px] lg:left-6 lg:right-auto lg:w-[325px] lg:top-4 z-[2100] bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-xl rounded-xl p-4 flex flex-col gap-4 max-h-[80vh] overflow-y-auto custom-scrollbar"
+                className="absolute top-[54px] left-[10px] right-[10px] lg:right-6 lg:left-auto lg:w-[325px] lg:top-[70px] z-[2100] bg-[var(--color-surface)] border border-[var(--color-fg)]/20 shadow-xl rounded-xl p-4 flex flex-col gap-4 max-h-[80vh] overflow-y-auto custom-scrollbar"
               >
                 {/* Header */}
                 <div className="flex items-center justify-between pb-2 border-b border-[var(--color-fg)]/10">
@@ -7611,15 +7699,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
 
 
               
-              {is3D ? (
-                  <Map3D 
-                    points={points} 
-                    kavlings={kavlings} 
-                    savedProjects={savedProjects}
-                    currentProjectId={currentProjectId}
-                  />
-              ) : (
-                <motion.div 
+              <motion.div 
                   initial={false}
                   animate={isPerspective ? {
                     rotateX: 45,
@@ -7971,7 +8051,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                 {k.center && k.type !== 'road' && (
                                     <>
                                         {/* Center Label (e.g. A1, 110 M2) */}
-                                        <Marker position={[k.center[1], k.center[0]]} opacity={0}>
+                                        <Marker key={`label-${k.id}-${Math.round(k.area || 0)}-${k.widthStr || 0}-${k.depthStr || 0}`} position={[k.center[1], k.center[0]]} opacity={0}>
                                             <Tooltip permanent direction="center" className="leaflet-tooltip-transparent text-white font-bold opacity-100 text-center">
                                                 <motion.div 
                                                     initial={{ opacity: 0, scale: 0.5 }}
@@ -8001,6 +8081,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                                     <span className="text-[9px] font-mono font-medium tracking-tight text-slate-300">
                                                         {Math.round(k.area)} m²
                                                     </span>
+
                                                 </motion.div>
                                             </Tooltip>
                                         </Marker>
@@ -8008,7 +8089,7 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                         {k.edges && k.edges.map((e: any, eId: number) => {
                                             const edgeIcon = L.divIcon({
                                                 className: 'bg-transparent text-[8px] font-mono font-semibold text-white whitespace-nowrap text-center !ml-[-50%] !mt-[-6px] opacity-100 pointer-events-none',
-                                                html: `<div style="transform: rotate(${e.angle}deg) translateY(-8px); transform-origin: center; display: inline-block; padding: 1px 4px; background: transparent; border-radius: 4px; text-shadow: 0px 0px 3px black, 0px 0px 3px black; opacity: 0; animation: edgeFadeIn 0.5s ease-out ${index * 0.04 + 0.4}s forwards;">${e.dist.toFixed(1)}m</div>`,
+                                                html: `<div style="transform: rotate(${e.angle}deg) translateY(-8px); transform-origin: center; display: inline-block; padding: 1px 4px; background: transparent; border-radius: 4px; text-shadow: 0px 0px 3px black, 0px 0px 3px black; opacity: 0.95; color: white;">${e.dist.toFixed(1)}m</div>`,
                                                 iconSize: [0, 0]
                                             });
                                             return (
@@ -8331,7 +8412,6 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
             />
             </MapContainer>
             </motion.div>
-          )}
           </div>
           
           
@@ -9031,6 +9111,127 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                 )}
                               </div>
                             </div>
+
+                            {/* Area Comparison Section */}
+                            <div className="bg-[var(--color-fg)]/5 p-2.5 rounded border border-[var(--color-fg)]/10 space-y-2 mt-3 text-[var(--color-fg)]">
+                              <div className="border-b border-[var(--color-fg)]/10 pb-1.5 flex justify-between items-center text-[10px] font-bold uppercase tracking-wider">
+                                <span>📊 {lang === 'id' ? 'Pembanding Luas Lahan' : 'Area Comparison'}</span>
+                                {kavlings.length > 0 && (
+                                  <span className="text-[8px] bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded font-bold uppercase">
+                                    {Math.round((kavlings.filter(k => k.type !== 'road').reduce((sum, k) => sum + (k.area || 0), 0) / stats.areaSqMeters) * 100)}% {lang === 'id' ? 'Efisien' : 'Efficient'}
+                                  </span>
+                                )}
+                              </div>
+                              
+                              {kavlings.length > 0 ? (
+                                <div className="space-y-3">
+                                  <div className="h-44 w-full pointer-events-auto mt-2">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                      <BarChart
+                                        data={[
+                                          {
+                                            name: lang === 'id' ? 'Total' : 'Total',
+                                            m2: Math.round(stats.areaSqMeters),
+                                            color: '#3b82f6'
+                                          },
+                                          {
+                                            name: lang === 'id' ? 'Kavling' : 'Plots',
+                                            m2: Math.round(kavlings.filter(k => k.type !== 'road').reduce((sum, k) => sum + (k.area || 0), 0)),
+                                            color: '#10b981'
+                                          },
+                                          {
+                                            name: lang === 'id' ? 'Jalan' : 'Roads',
+                                            m2: Math.round(kavlings.filter(k => k.type === 'road').reduce((sum, k) => sum + (k.area || 0), 0)),
+                                            color: '#f59e0b'
+                                          },
+                                          {
+                                            name: lang === 'id' ? 'Sisa' : 'Rest',
+                                            m2: Math.max(0, Math.round(stats.areaSqMeters - kavlings.reduce((sum, k) => sum + (k.area || 0), 0))),
+                                            color: '#8b5cf6'
+                                          }
+                                        ]}
+                                        margin={{ top: 10, right: 5, left: -25, bottom: 5 }}
+                                        barSize={20}
+                                      >
+                                        <XAxis 
+                                          dataKey="name" 
+                                          tick={{ fill: 'var(--color-fg)', fontSize: 9, opacity: 0.7 }}
+                                          axisLine={{ stroke: 'rgba(var(--color-fg-rgb), 0.1)' }}
+                                          tickLine={false}
+                                        />
+                                        <YAxis 
+                                          tick={{ fill: 'var(--color-fg)', fontSize: 8, opacity: 0.6 }}
+                                          axisLine={{ stroke: 'rgba(var(--color-fg-rgb), 0.1)' }}
+                                          tickLine={false}
+                                        />
+                                        <RechartsTooltip
+                                          formatter={(value: number) => [`${value.toLocaleString('id-ID')} m²`, lang === 'id' ? 'Luas' : 'Area']}
+                                          contentStyle={{ backgroundColor: 'var(--color-bg)', borderColor: 'rgba(var(--color-fg-rgb), 0.15)', borderRadius: '6px', fontSize: '10px' }}
+                                          labelStyle={{ fontWeight: 'bold', color: 'var(--color-fg)' }}
+                                        />
+                                        <Bar dataKey="m2" radius={[4, 4, 0, 0]}>
+                                          {[
+                                            { color: '#3b82f6' },
+                                            { color: '#10b981' },
+                                            { color: '#f59e0b' },
+                                            { color: '#8b5cf6' }
+                                          ].map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={entry.color} />
+                                          ))}
+                                        </Bar>
+                                      </BarChart>
+                                    </ResponsiveContainer>
+                                  </div>
+
+                                  <div className="grid grid-cols-2 gap-2 text-[9px] pt-1 border-t border-[var(--color-fg)]/5">
+                                    <div className="flex items-center gap-1.5">
+                                      <div className="w-2 h-2 rounded bg-emerald-500 shrink-0" />
+                                      <span className="opacity-70">{lang === 'id' ? 'Kavling Jual:' : 'Sellable Plots:'}</span>
+                                      <span className="font-bold text-emerald-500 dark:text-emerald-400">
+                                        {Math.round(kavlings.filter(k => k.type !== 'road').reduce((sum, k) => sum + (k.area || 0), 0)).toLocaleString('id-ID')} m²
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <div className="w-2 h-2 rounded bg-amber-500 shrink-0" />
+                                      <span className="opacity-70">{lang === 'id' ? 'Jalan / Fasum:' : 'Roads / Infrastructure:'}</span>
+                                      <span className="font-bold text-amber-500 dark:text-amber-400">
+                                        {Math.round(kavlings.filter(k => k.type === 'road').reduce((sum, k) => sum + (k.area || 0), 0)).toLocaleString('id-ID')} m²
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <div className="w-2 h-2 rounded bg-purple-500 shrink-0" />
+                                      <span className="opacity-70">{lang === 'id' ? 'Sisa Lahan:' : 'Unallocated Rest:'}</span>
+                                      <span className="font-bold text-purple-500 dark:text-purple-400">
+                                        {Math.max(0, Math.round(stats.areaSqMeters - kavlings.reduce((sum, k) => sum + (k.area || 0), 0))).toLocaleString('id-ID')} m²
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <div className="w-2 h-2 rounded bg-blue-500 shrink-0" />
+                                      <span className="opacity-70">{lang === 'id' ? 'Total Lahan:' : 'Total Land Area:'}</span>
+                                      <span className="font-bold text-blue-500 dark:text-blue-400">
+                                        {Math.round(stats.areaSqMeters).toLocaleString('id-ID')} m²
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="p-3 text-center rounded bg-[var(--color-fg)]/5 border border-dashed border-[var(--color-fg)]/10 space-y-2">
+                                  <div className="h-28 w-full pointer-events-none opacity-20 flex items-center justify-center">
+                                    <div className="flex items-end gap-3 h-16">
+                                      <div className="w-6 bg-[var(--color-fg)] h-16 rounded-sm" />
+                                      <div className="w-6 bg-[var(--color-fg)] h-8 rounded-sm" />
+                                      <div className="w-6 bg-[var(--color-fg)] h-5 rounded-sm" />
+                                      <div className="w-6 bg-[var(--color-fg)] h-4 rounded-sm" />
+                                    </div>
+                                  </div>
+                                  <p className="text-[10px] leading-relaxed opacity-60">
+                                    {lang === 'id' 
+                                      ? 'Lakukan subdivisi otomatis lahan pada tab "Auto Kavling" untuk melihat perbandingan efisiensi luas tanah secara real-time.' 
+                                      : 'Run automatic land subdivision in the "Auto Kavling" tab to see real-time area efficiency comparisons here.'}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
 
@@ -9649,7 +9850,9 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
               className="w-full py-4 bg-[var(--color-fg)] text-[var(--color-bg)] text-[12px] uppercase tracking-widest font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed shadow-lg"
               title={lang === 'id' ? "Dapatkan laporan PDF profesional, file CAD DXF, GeoJSON kustom atau CSV" : "Generate professional PDF reports, DXF CAD files, GeoJSON, or CSV"}
             >
-              <Download size={16} /> {t(lang, 'exportData')}
+              <FileText size={16} className="text-red-500 dark:text-red-400" /> 
+              <span>{t(lang, 'exportData')}</span>
+              <span className="ml-1 bg-red-500 dark:bg-red-600 text-[8px] text-white px-1.5 py-0.5 rounded font-black tracking-normal uppercase leading-none scale-90">PDF</span>
             </button>
 
             {showGuideMode && (
