@@ -5000,11 +5000,7 @@ Format jawaban dalam Bahasa Indonesia, rapi menggunakan Markdown, poin demi poin
                         iconSize: [10, 10],
                         iconAnchor: [5, 5]
                     })}
-                >
-                    <Tooltip permanent direction="top" offset={[0, -5]} className="leaflet-tooltip-white-block">
-                        <span className="text-[10px] font-bold uppercase">M_{i+1}</span>
-                    </Tooltip>
-                </Marker>
+                />
             ))}
             {measurePoints.length > 1 && (
                 <>
