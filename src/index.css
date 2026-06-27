@@ -103,3 +103,8 @@ body {
   }
 }
 
+/* Fallback for GeoServer styling in case SLD is blocked by the server */
+.plot-only-layer {
+  filter: invert(1) sepia(1) saturate(100) hue-rotate(20deg) brightness(1.2) contrast(1.5);
+  mix-blend-mode: screen;
+}

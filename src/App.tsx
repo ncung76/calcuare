@@ -2,9 +2,10 @@ import React, { useState, useEffect, useRef, useCallback, startTransition, useRe
 
 import { DXFPreview } from './components/DXFPreview';
 import { MeasureHandler } from './components/MeasureHandler';
+import { OnboardingTour } from './components/OnboardingTour';
 import { MapContainer, TileLayer, WMSTileLayer, Polygon, useMapEvents, CircleMarker, Tooltip, Polyline, Marker, useMap, Popup, LayersControl, LayerGroup, GeoJSON } from 'react-leaflet';
 import * as turf from '@turf/turf';
-import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X, Lock, Unlock, ChevronLeft, ChevronRight, Eye, EyeOff, Sparkles, Loader2, FileText } from 'lucide-react';
+import { LogIn, LogOut, User as UserIcon, MapPin, Eraser, Trash2, Crosshair, HelpCircle, ArrowLeft, Ruler, Plus, Download, Search, Sun, Moon, ZoomIn, ZoomOut, Info, Pencil, MousePointer2, Check, Settings, Layers, FileJson, Table, Layout, BarChart2, Share2, Link, Navigation, Menu, X, Lock, Unlock, ChevronLeft, ChevronRight, Eye, EyeOff, Sparkles, Loader2, FileText, Compass } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import L from 'leaflet';
 import proj4 from 'proj4';
@@ -1740,6 +1741,9 @@ export default function App() {
 
   // Modal State
   const [activeModal, setActiveModal] = useState<'none' | 'library' | 'settings' | 'export' | 'import' | 'dxfPreview' | 'kavling' | 'menu' | 'tutorial'>('none');
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(() => {
+    return !localStorage.getItem('calcuare_onboarded_v2');
+  });
   const [savedProjects, setSavedProjects] = useState<any[]>([]);
   const [newProjectName, setNewProjectName] = useState('');
   const [projectDetails, setProjectDetails] = useState('');
@@ -5347,7 +5351,41 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                                   : "Use the following guide to maximize Calcuare V2 features for precise land planning, measurement, and spatial analysis."}
                             </p>
 
-                            <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
+                            <div className="bg-gradient-to-br from-indigo-500/10 to-fuchsia-500/10 border border-indigo-500/30 rounded-2xl p-5 space-y-3 shadow-md relative overflow-hidden">
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none" />
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-indigo-500 rounded-xl text-white">
+                                        <Compass size={18} className="animate-spin-slow" />
+                                    </div>
+                                    <div>
+                                        <h4 className="text-[13px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                                            {lang === 'id' ? "Tur Interaktif & Onboarding" : "Interactive Guided Tour & Onboarding"}
+                                        </h4>
+                                        <p className="text-[11px] opacity-70">
+                                            {lang === 'id' ? "Panduan visual interaktif langkah demi langkah." : "Step-by-step interactive visual workflow guidance."}
+                                        </p>
+                                    </div>
+                                </div>
+                                <p className="text-[11.5px] opacity-90 leading-relaxed">
+                                    {lang === 'id' 
+                                      ? "Pelajari fungsi utama Calcuare V2 secara interaktif. Kami akan memandu Anda mengenal kanvas peta, mengimpor CAD/DXF, memeriksa tata ruang RDTR, hingga melakukan pembagian kapling otomatis."
+                                      : "Discover Calcuare V2's primary functions interactively. We will walk you through the map canvas, CAD/DXF imports, checking RDTR spatial plans, and auto subdivision layout."}
+                                </p>
+                                <div className="pt-1">
+                                    <button
+                                        onClick={() => {
+                                            setActiveModal('none');
+                                            setShowOnboarding(true);
+                                        }}
+                                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-[11px] text-white font-extrabold uppercase tracking-widest shadow-lg shadow-indigo-600/15 dark:shadow-indigo-500/15 transition-all cursor-pointer"
+                                    >
+                                        <Sparkles size={14} className="animate-pulse text-amber-300" />
+                                        {lang === 'id' ? "Mulai Tur Interaktif Sekarang" : "Start Interactive Tour Now"}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="space-y-4 max-h-[45vh] overflow-y-auto pr-1">
                                 {/* Guidance Tip */}
                                 <div className="border border-fuchsia-500/20 rounded-xl p-4 bg-fuchsia-500/5 space-y-2">
                                     <h4 className="text-[12px] uppercase font-bold tracking-wider flex items-center gap-2 text-fuchsia-600">
@@ -7777,19 +7815,55 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
                   )}
 
                   {/* GeoServer Dorado WMS Layers */}
-                  {wmsLayersList.map((layer, idx) => layer.visible !== false && (
-                    <WMSTileLayer
-                      key={idx}
-                      url="https://geo2.perare.io/geoserver/dorado/wms"
-                      layers={layer.layers}
-                      format="image/png"
-                      transparent={true}
-                      maxZoom={24}
-                      opacity={layer.opacity !== undefined ? layer.opacity : wmsOpacity}
-                      className={`custom-wms-layer-${idx}`}
-                      crossOrigin="anonymous"
-                    />
-                  ))}
+                  {wmsLayersList.map((layer, idx) => {
+                    if (layer.visible === false) return null;
+                    const isPlotOnly = layer.layers === 'dorado:plot_only';
+                    const customSld = isPlotOnly ? `<?xml version="1.0" encoding="UTF-8"?>
+<StyledLayerDescriptor version="1.0.0" xmlns="http://www.opengis.net/sld" xmlns:ogc="http://www.opengis.net/ogc" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.opengis.net/sld http://schemas.opengis.net/sld/1.0.0/StyledLayerDescriptor.xsd">
+  <NamedLayer>
+    <Name>${layer.layers}</Name>
+    <UserStyle>
+      <Name>yellow_transparent</Name>
+      <FeatureTypeStyle>
+        <Rule>
+          <PolygonSymbolizer>
+            <Fill>
+              <CssParameter name="fill">#FFFFFF</CssParameter>
+              <CssParameter name="fill-opacity">0.0</CssParameter>
+            </Fill>
+            <Stroke>
+              <CssParameter name="stroke">#EAB308</CssParameter>
+              <CssParameter name="stroke-width">2.0</CssParameter>
+            </Stroke>
+          </PolygonSymbolizer>
+          <LineSymbolizer>
+            <Stroke>
+              <CssParameter name="stroke">#EAB308</CssParameter>
+              <CssParameter name="stroke-width">2.0</CssParameter>
+            </Stroke>
+          </LineSymbolizer>
+        </Rule>
+      </FeatureTypeStyle>
+    </UserStyle>
+  </NamedLayer>
+</StyledLayerDescriptor>` : undefined;
+                    
+                    return (
+                      <WMSTileLayer
+                        key={idx}
+                        url="https://geo2.perare.io/geoserver/dorado/wms"
+                        layers={layer.layers}
+                        styles=""
+                        format="image/png"
+                        transparent={true}
+                        maxZoom={24}
+                        opacity={layer.opacity !== undefined ? layer.opacity : wmsOpacity}
+                        className={`custom-wms-layer-${idx} ${isPlotOnly ? 'plot-only-layer' : ''}`}
+                        crossOrigin="anonymous"
+                        {...(customSld ? { sld_body: customSld } : {})}
+                      />
+                    );
+                  })}
 
                   {showRdtr && (
                       <WMSTileLayer
@@ -9898,6 +9972,22 @@ const calculateTotalMeasureDistance = (pts: [number, number][]) => {
             </button>
         ))}
       </div>
+
+      {showOnboarding && (
+        <OnboardingTour
+          lang={lang}
+          onComplete={() => {
+            localStorage.setItem('calcuare_onboarded_v2', 'true');
+            setShowOnboarding(false);
+          }}
+          mobileTab={mobileTab}
+          setMobileTab={setMobileTab}
+          showLeftSidebar={showLeftSidebar}
+          setShowLeftSidebar={setShowLeftSidebar}
+          showRightSidebar={showRightSidebar}
+          setShowRightSidebar={setShowRightSidebar}
+        />
+      )}
     </div>
   );
 }
